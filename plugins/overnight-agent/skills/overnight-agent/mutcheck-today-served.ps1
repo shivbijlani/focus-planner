@@ -107,8 +107,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
 $ScriptPath = (Resolve-Path $ScriptPath).Path
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:IsNodeTarget = Test-OaStateNodeTarget $ScriptPath
 
 $utf8 = New-Object Text.UTF8Encoding($false)
 
@@ -197,9 +199,10 @@ function Invoke-Arms {
     # instead of reporting -- which is exactly the failure the sibling suites document as worse
     # than a vacuous pass. Arms that expect a command to FAIL depend on getting the output back.
     $ErrorActionPreference = 'Continue'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $Build @OaArgs `
-      -JournalDir $box.jdir -StateDir $box.sdir -PlannerBoard $box.board -SnoozeStore $box.store `
-      -UserSettings $box.settings 2>&1
+    $cmd = Get-OaStateCommand $Build
+    & $cmd.Exe @($cmd.Prefix + $OaArgs +
+      @('-JournalDir', $box.jdir, '-StateDir', $box.sdir, '-PlannerBoard', $box.board,
+        '-SnoozeStore', $box.store, '-UserSettings', $box.settings)) 2>&1
   }
   function Oa-Ok {
     # $true when the command succeeded. Used by the arms that assert a declaration is REFUSED.
@@ -689,7 +692,12 @@ function New-Mutant {
 # construction and its targets are expected not to match -- reporting drift there would be a
 # guaranteed false alarm on every run, which is how a check gets ignored.
 $script:MutantTargetsOk = $true
-if (-not $ExpectPreFix) { Test-MutantTargets }
+if (-not $ExpectPreFix -and -not $script:IsNodeTarget) {
+  Test-MutantTargets
+} elseif ($script:IsNodeTarget) {
+  "  targets skipped for Node target (arms still run against oa-state.mjs)"
+  ""
+}
 
 $results = Invoke-Arms $ScriptPath
 $pass = 0; $fail = 0
@@ -711,6 +719,10 @@ if ($fail -gt 0) { exit 1 }
 if (-not $script:MutantTargetsOk) { exit 1 }
 
 if (-not $Matrix) { exit 0 }
+if ($script:IsNodeTarget) {
+  "MATRIX skipped for Node target: PowerShell source mutants do not apply to the Node bundle in this check."
+  exit 0
+}
 
 # --- the bijection, asserted rather than claimed --------------------------------------------
 ""

@@ -1,0 +1,14 @@
+{
+  "files": {},
+  "id": "mc/write-turn/bad-args-journal-not-found",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "999"
+      },
+      "exit": 1,
+      "tool": "write-turn"
+    }
+  ]
+}

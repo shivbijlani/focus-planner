@@ -1,0 +1,839 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-lanes"
+  ],
+  "cases": [
+    {
+      "id": "lanes/scan-device-a-compact",
+      "note": "E2/E3: device A serves ado only. 940/943/944 (home, home, no lane) are left out of the compact worklist and do not hold the Today gate here, so the QUIET ado Deferred row 941 (assigned; tracked and unchanged, so only the gate decides) is eligible, and 942 (inherited from 941) too.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 1,\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"941\": \"ado\"\n  }\n}\n",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"3f2b9c4e-8d1a-4b7e-9f60-2c5d8e1a7b34\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/scan-device-a-full",
+      "note": "E2/E3 full worklist: every row keeps its lane fields; out-of-lane Today rows report today_release_reason lane_not_served.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 1,\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"941\": \"ado\"\n  }\n}\n",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"3f2b9c4e-8d1a-4b7e-9f60-2c5d8e1a7b34\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "lanes/scan-device-b-compact",
+      "note": "Device B serves home and is catch-all: 940 (home, unanswered reply) is eligible, 943/944 hold the Today gate, ado rows and the 945 conflict are out of lane.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 1,\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"941\": \"ado\"\n  }\n}\n",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"00000000-0000-4000-8000-000000000000\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/session-device-a-refuses-other-lane",
+      "note": "E4/E5/E6: device A refuses to check, wake or bind a session for home task 940; release is still allowed.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 1,\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"941\": \"ado\"\n  }\n}\n",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"3f2b9c4e-8d1a-4b7e-9f60-2c5d8e1a7b34\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "940",
+            "CheckDispatch": true,
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "940",
+            "ForDispatch": true,
+            "DispatchInput": "x",
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "940",
+            "SessionId": "S-NEW",
+            "Force": true
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "940",
+            "SessionRelease": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/session-conflict-refused",
+      "note": "E9: task 945 has two own lanes; no PC dispatches it.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 1,\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"941\": \"ado\"\n  }\n}\n",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"00000000-0000-4000-8000-000000000000\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "945",
+            "CheckDispatch": true,
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/session-device-b-own-lane",
+      "note": "Device B checks its own home task 940: the lane floor passes and the normal dispatch checks decide.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 1,\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"941\": \"ado\"\n  }\n}\n",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"00000000-0000-4000-8000-000000000000\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "940",
+            "CheckDispatch": true,
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/invalid-file-stops-everything",
+      "note": "E7: a lanes file that does not parse serves nothing: no row eligible, summary.lanes.state invalid, dispatch refused.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "not json",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"00000000-0000-4000-8000-000000000000\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "940",
+            "CheckDispatch": true,
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/corrupt-device-identity",
+      "note": "E10: device.json unreadable: this PC serves nothing.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand #lane:home | - | 2020-01-10 | |\n| 943 | 🟡 | Home today #lane:home | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes #lane:home #lane:ado | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 1,\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"941\": \"ado\"\n  }\n}\n",
+        "home/device.json": "{ \"schema\": \"nope\" }",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/unassigned-device-matches-off",
+      "note": "E8: a minimal lanes file, no device.json, no tags: the same eligibility and order as with no file (step 1 vs step 3); rows gain lane fields only.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Home errand | - | 2020-01-10 | |\n| 943 | 🟡 | Home today | - | 2020-01-10 | |\n| 944 | 🟡 | Untagged today | - | 2020-01-10 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 941 | 🟡 | ADO report | - | 2020-01-05 | | |\n| 942 | 🟡 | ADO follow-up | - | 2020-01-05 | | 941 |\n| 945 | 🟡 | Two lanes | - | 2020-01-05 | | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/journal/task-940.md": "# Task 940: Home errand\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "data/journal/task-941.md": "# Task 941: ADO report\n\nUser notes.\n",
+        "data/journal/task-942.md": "# Task 942: ADO follow-up\n\nUser notes.\n",
+        "data/journal/task-943.md": "# Task 943: Home today\n\nUser notes.\n",
+        "data/journal/task-944.md": "# Task 944: Untagged today\n\nUser notes.\n",
+        "data/journal/task-945.md": "# Task 945: Two lanes\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** In progress\n\nWorking on it.\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nplease also check the gutters\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t940-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-940",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-945.json": {
+          "id": "945",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t945-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-945",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-940\",\"activity\":{\"status\":\"idle\"}},{\"id\":\"S-945\",\"activity\":{\"status\":\"idle\"}}]}",
+        "state/task-941.json": {
+          "id": "941",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t941-v1",
+          "processed_file_hash": "1874e85cac82e7d00d9436c08def0bd72a0de099f2d00f99536376b96bdeb51a",
+          "has_agent_block": false,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        },
+        {
+          "files": {
+            "data/agent-lanes.json": "{ \"schema\": \"fp-agent-lanes@1\" }\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "lanes/resolution-vectors",
+      "note": "R1-R25 (tests/lanes/vectors.json) on device A: lane, lane_source, lane_from, lane_problem, lane_candidates and lane_served_here for every vector row.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---------------|-------|-----------|\n| 10 | 🟡 | ADO epic | - | 2026-09-01 | |\n| 11 | 🟡 | ADO child | - | 2026-09-01 | 10 |\n| 12 | 🟡 | Grandchild | - | 2026-09-01 | 11 |\n| 20 | 🟡 | Home errand #lane:home | - | 2026-09-01 | |\n| 21 | 🟡 | Untagged | - | 2026-09-01 | |\n| 22 | 🟡 | Child overrides #lane:ado | - | 2026-09-01 | 20 |\n| 23 | 🟡 | Opt out #lane:none | - | 2026-09-01 | 10 |\n| 24 | 🟡 | Two lanes #lane:home #lane:ado | - | 2026-09-01 | |\n| 25 | 🟡 | Tag vs map #lane:home | - | 2026-09-01 | |\n| 26 | 🟡 | Agrees #lane:ado | - | 2026-09-01 | |\n| 27 | 🟡 | Bad tag #lane:a_b | - | 2026-09-01 | |\n| 28 | 🟡 | Shouting #LANE:ADO | - | 2026-09-01 | |\n| 29 | 🟡 | Cycle one | - | 2026-09-01 | 30 |\n| 30 | 🟡 | Cycle two | - | 2026-09-01 | 29 |\n| 31 | 🟡 | Two parents | - | 2026-09-01 | 21, 20 |\n| 32 | 🟡 | Child of a conflict | - | 2026-09-01 | 24 |\n| 33 | 🟡 | Parent completed | - | 2026-09-01 | 5 |\n| 34 | 🟡 | Hidden <!-- #lane:ado --> | - | 2026-09-01 | |\n| 35 | 🟡 | Cloud job #lane:cloud | - | 2026-09-01 | |\n| 36 | 🟡 | In brackets (#lane:home). | - | 2026-09-01 | |\n| 37 | 🟡 | Empty #lane: | - | 2026-09-01 | |\n| 38 | 🟡 | Twice #lane:home and #lane:HOME | - | 2026-09-01 | |\n| 39 | 🟡 | Email me#lane:home | - | 2026-09-01 | |\n| 40 | 🟡 | Grandchild of opt-out | - | 2026-09-01 | 23 |\n| 41 | 🟡 | Reserved #lane:any | - | 2026-09-01 | |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-lanes.json": "{\n  \"schema\": \"fp-agent-lanes@1\",\n  \"revision\": 3,\n  \"updatedAt\": \"2026-10-03T12:00:00.000Z\",\n  \"devices\": {\n    \"49c15e85f7f7ffd841a8cb86d233f965\": {\n      \"name\": \"HOME-DESKTOP\",\n      \"lanes\": [\n        \"home\"\n      ],\n      \"catchAll\": true\n    },\n    \"86b8ff7cab63af69cc52ff83591b0ffd\": {\n      \"name\": \"WORK-LAPTOP\",\n      \"lanes\": [\n        \"ado\"\n      ],\n      \"catchAll\": false\n    }\n  },\n  \"tasks\": {\n    \"5\": \"ado\",\n    \"10\": \"ado\",\n    \"25\": \"ado\",\n    \"26\": \"ado\"\n  }\n}",
+        "home/device.json": "{\"schema\":\"fp-agent-device@1\",\"id\":\"3f2b9c4e-8d1a-4b7e-9f60-2c5d8e1a7b34\",\"createdAt\":\"2020-03-01T00:00:00.000Z\"}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    }
+  ]
+}

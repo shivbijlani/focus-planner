@@ -1,0 +1,17 @@
+{
+  "files": {},
+  "id": "mc/gate-edit-ask/fenced-example-allowed",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

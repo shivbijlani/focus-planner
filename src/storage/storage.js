@@ -8,7 +8,8 @@ import {
   oneDriveProvider,
   googleDriveProvider,
 } from '../../packages/folder-sync/src/index.js'
-import { IndexedDbProvider } from './indexeddb-provider.js'
+import { createProvider, getProvider as getProviderDefinition, listProviders } from './registry.js'
+import { PROVIDERS } from './providerTypes.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 import { scaffoldAgentGate } from '../config/agentGate.js'
 import { getActiveTombstoneIds } from '../idTombstones.js'
@@ -36,30 +37,14 @@ export const TARGET_STATUS = {
   ERROR: 'error',
 }
 
-export const PROVIDERS = {
-  LOCAL_STORAGE: 'local-storage',
-  FSA: 'fsa',
-  ONEDRIVE: 'onedrive',
-  GOOGLE_DRIVE: 'google-drive',
-}
+export { PROVIDERS }
 
 export function getProviderName(id) {
-  switch (id) {
-    case PROVIDERS.LOCAL_STORAGE: return 'Browser Storage'
-    case PROVIDERS.FSA: return 'Local Folder'
-    case PROVIDERS.ONEDRIVE: return 'OneDrive'
-    case PROVIDERS.GOOGLE_DRIVE: return 'Google Drive'
-    default: return id
-  }
+  return getProviderDefinition(id)?.label || id
 }
 
 export function getAvailableProviders() {
-  const list = [PROVIDERS.LOCAL_STORAGE]
-  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
-    list.push(PROVIDERS.FSA)
-  }
-  list.push(PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE)
-  return list
+  return listProviders().map(provider => provider.type)
 }
 
 // ── Active provider singleton ──────────────────────────
@@ -119,13 +104,21 @@ const localAdapter = {
   },
 }
 
+// Options applied when the engine is first constructed. The Docs app (docs.html) sets
+// `redirectUri` to the planner's root so an OAuth reconnect returns to the URI that is
+// registered with Microsoft/Google (origin + '/'), not to /docs.html.
+let _engineOpts = {}
+export function configureEngine(opts = {}) {
+  _engineOpts = { ..._engineOpts, ...opts }
+}
+
 function getEngine() {
   if (_engine) return _engine
   const providers = [oneDriveProvider({ clientId: ONEDRIVE_CLIENT_ID })]
   if (GOOGLE_CLIENT_ID) providers.push(googleDriveProvider({ clientId: GOOGLE_CLIENT_ID }))
   // Constructing the engine kicks off connected-flag refresh and OAuth-redirect
   // completion, and wires online/visibility nudges to the service worker.
-  _engine = createSyncEngine({ localAdapter, providers })
+  _engine = createSyncEngine({ localAdapter, providers, deferLocalInit: true, ..._engineOpts })
   // Record provider error transitions into Diagnostics (deduped per provider so
   // a stuck error doesn't spam the buffer). No-op unless diagnostics are enabled.
   try {
@@ -153,7 +146,7 @@ function mapTargetStatus(p, overall) {
   if (!p) return TARGET_STATUS.DISCONNECTED
   if (p.state === 'reconnect-required') return TARGET_STATUS.RECONNECT_NEEDED
   if (!p.connected) return TARGET_STATUS.DISCONNECTED
-  if (p.state === 'error') return TARGET_STATUS.ERROR
+  if (overall === 'error' || p.state === 'error') return TARGET_STATUS.ERROR
   if (overall === 'syncing' || p.state === 'syncing') return TARGET_STATUS.SYNCING
   return TARGET_STATUS.SYNCED // connected & (synced | idle)
 }
@@ -163,7 +156,7 @@ function mapEngineStatus(s) {
   const targets = {}
   for (const id of [PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE]) {
     const p = provStates[id]
-    targets[id] = { status: mapTargetStatus(p, s?.state), message: p?.error || '' }
+    targets[id] = { status: mapTargetStatus(p, s?.state), message: p?.error || s?.error || '' }
   }
   const statuses = Object.values(targets).map(t => t.status)
   let aggregate = TARGET_STATUS.DISCONNECTED
@@ -171,7 +164,7 @@ function mapEngineStatus(s) {
     aggregate = TARGET_STATUS.SYNCING
   } else if (statuses.includes(TARGET_STATUS.RECONNECT_NEEDED)) {
     aggregate = TARGET_STATUS.RECONNECT_NEEDED
-  } else if (statuses.includes(TARGET_STATUS.ERROR)) {
+  } else if (s?.state === 'error' || statuses.includes(TARGET_STATUS.ERROR)) {
     aggregate = TARGET_STATUS.ERROR
   } else if (statuses.includes(TARGET_STATUS.SYNCED)) {
     aggregate = TARGET_STATUS.SYNCED
@@ -184,9 +177,8 @@ export function getActiveProvider() { return _provider }
 export function hasProvider() { return _provider !== null }
 
 export function configureLocalFirstStorage() {
-  const provider = new IndexedDbProvider()
+  const provider = createProvider(PROVIDERS.LOCAL_STORAGE)
   setActiveProvider(provider)
-  localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
   return provider
 }
 
@@ -241,7 +233,7 @@ export function subscribeSyncStatus(listener) {
 export async function restoreSyncTargets() {
   // Merely constructing the engine refreshes connected-provider flags and
   // completes any in-flight OAuth redirect; the SW handles push+pull from there.
-  getEngine()
+  await getEngine().initLocal()
 }
 
 export function startAutoSync() {
@@ -410,69 +402,4 @@ export async function journalIds() {
   if (!_provider) throw new Error('No provider set')
   const ids = _provider.journalIds ? await _provider.journalIds() : new Set()
   return withTombstones(ids)
-}
-
-// ── Cross-source read helpers (for Combined view) ─────
-// These bypass the active-provider singleton so the Combined view can
-// pull data from every registered source in parallel.
-
-export async function readFromSource(sourceId, path) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.read(path)
-}
-
-export async function writeToSource(sourceId, path, content) {
-  const { getActiveSourceId, getProvider } = await import('./sources.js')
-  if (sourceId === getActiveSourceId()) return write(path, content)
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.write(path, content)
-}
-
-export async function maxJournalIdFromSource(sourceId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) return 0
-  try { return await p.maxJournalId() } catch { return 0 }
-}
-
-export async function journalIdsFromSource(sourceId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p || !p.journalIds) return withTombstones(new Set())
-  try { return withTombstones(await p.journalIds()) } catch { return withTombstones(new Set()) }
-}
-
-export async function getFilesFromSource(sourceId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.getFiles()
-}
-
-export async function removeFromSource(sourceId, path) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.remove(path)
-}
-
-export async function checkJournalFromSource(sourceId, taskId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) return { exists: false }
-  try { return await p.checkJournal(taskId) } catch { return { exists: false } }
-}
-
-export async function getTodosFromSource(sourceId, path) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) return []
-  try {
-    const content = await p.read(path)
-    const { parseTodos } = await import('./fsa.js')
-    return parseTodos(content)
-  } catch { return [] }
 }

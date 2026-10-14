@@ -1,0 +1,29 @@
+{
+  "files": {},
+  "id": "cmd/doc/112-read",
+  "steps": [
+    {
+      "args": {
+        "Id": "112"
+      },
+      "command": "doc",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "doc_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEF",
+        "doc_url": "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEF/edit",
+        "healed": false,
+        "id": "112",
+        "journal_stamp_mismatch_id": null,
+        "journal_stamped": true,
+        "new_comment_ids": null,
+        "new_comments": 0,
+        "observation": null,
+        "observed_at": "<INVTIME-30m>",
+        "seen_comments": 1,
+        "source": "state"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

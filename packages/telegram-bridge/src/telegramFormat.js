@@ -158,6 +158,14 @@ export function mdToTelegramHtml(md) {
       continue
     }
 
+    // A line that is exactly one complete HTML comment is machine metadata -- the journal's
+    // `<!-- oa-ask: ... -->` and `<!-- oa-by: ... -->` stamps. The planner app renders it as
+    // nothing; posting it escaped put literal `<!-- ... -->` text in the topic.
+    if (/^\s*<!--(?:(?!-->)[^\n])*-->\s*$/.test(line)) {
+      i++
+      continue
+    }
+
     // Blockquote: collect consecutive `>` lines into one <blockquote>.
     const bq = /^\s*>\s?(.*)$/.exec(line)
     if (bq) {

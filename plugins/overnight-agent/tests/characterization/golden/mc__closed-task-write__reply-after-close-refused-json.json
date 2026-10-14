@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/closed-task-write/reply-after-close-refused-json",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "9405",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G24",
+            "line": 1,
+            "snippet": "status=done status_by=agent completed_board=true",
+            "why": "task 9405 is closed by the user: it is on planner-completed.md. He replied since the close: \"one more thing - can you also check whether the emissions test is due?\". Put that reply in the run report to him under Replies on closed tasks, with task 9405 and \"reopen the row to continue\"; don't write to it and don't retry. Only the user can reopen a task he closed. This guard cannot be disabled"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "9405",
+        "length": 163,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

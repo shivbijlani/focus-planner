@@ -1,0 +1,43 @@
+{
+  "files": {},
+  "id": "cmd/session/113-create",
+  "steps": [
+    {
+      "args": {
+        "Id": "113"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": false,
+        "concurrency": 2,
+        "concurrency_source": "settings",
+        "created_at": null,
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "113",
+        "kickoff_continuation": null,
+        "kind": null,
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "settings",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": false,
+        "role_line": "You are the task session for planner task #113. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": null,
+        "state": null,
+        "teardown_command": null,
+        "verdict": "create",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": null
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -17,7 +17,8 @@ loop itself lives under `plugins/overnight-agent/`.
 
 | Layer | Primary files | What it guards against |
 | --- | --- | --- |
-| OS-dispatched supervision | `plugins/overnight-agent/checks/install-oa-supervisor.ps1`, `oa-supervisor.ps1`, `oa-supervisor-daemon.ps1`, `supervisor-liveness-sweep.ps1`, `supervisor-replay.mjs` | The agent or app scheduler stopping entirely |
+| OS-dispatched supervision | `plugins/overnight-agent/checks/install-oa-supervisor.ps1`, `oa-supervisor.ps1`, `oa-supervisor-daemon.ps1`, `supervisor-liveness-sweep.ps1`, `supervisor-replay.mjs` | The agent's own `*/30` schedule going stuck/dead, or the app tree leaking CPU |
+| Optional reliability/browser/update-check tray | `plugins/overnight-agent/checks/oa-supervisor-tray.ps1`, `oa-supervisor-startup.ps1`, `install-oa-reliability-tray.ps1`, `reliability-supervisor.mjs`, `consumer-browser-watchdog.mjs`, `consumer-update-check.mjs`, `oa-user-settings.mjs` | The desktop app itself hanging over a longer horizon (M/N preventive restart), stuck/closed browser automation slots, and a stale plugin install — each opt-in, via one `HKCU` Run entry |
 | Stuck-run and orphan repair | `plugins/overnight-agent/checks/stuck-run-sweep.mjs`, `orphan-liveness-sweep.mjs` | A `running` row, live ask, or live journal becoming invisible and permanently blocking progress |
 | Silent remedy | `plugins/overnight-agent/checks/oa-supervisor.ps1` | Alert fatigue from “red but unactioned” findings |
 | Deploy propagation | `version-bump-sweep.mjs`, `installed-skill-drift-sweep.mjs`, `installed-capability-sweep.mjs`, `sync-oa-home.ps1`, `SKILL.md` | Merged fixes not reaching the bytes the machine actually executes |
@@ -91,6 +92,21 @@ run history and asks the only questions that matter: does it catch true stalls, 
 slow self-terminating runs, and does it stay quiet on ordinary healthy runs. That is why the page's
 forward design is “OS-dispatched supervisor plus replayed thresholds”, not “more checks inside the
 run”.
+
+### A second, separate, opt-in supervisor: the reliability tray (GH #695/#698/#701)
+
+The Scheduled Task/Startup-shim supervisor above answers "is the Overnight Agent's own schedule
+stuck or dead, or is the app tree leaking CPU" from the app's own run history. It does **not**
+answer "has the desktop app itself been silently unresponsive for hours" — a question with no
+run-history signal at all. That question belongs to an optional, off-by-default Windows tray
+(`oa-supervisor-tray.ps1`) that runs a preventive M-quiet-opportunity/N-hard-deadline restart of
+the desktop app, and — as two further independent, individually opt-in workloads — periodic
+browser-automation-slot checks and plugin update checks. All three share exactly **one** startup
+route, a per-user `HKCU\...\Run` value, deliberately distinct from the Scheduled Task/Startup-shim
+route above: an out-of-band supervisor should not depend on the same dispatch mechanism as the
+thing (or the other supervisor) it exists to catch failing. Full behavior, configuration
+(`user-settings.md`), and troubleshooting live in `plugins/overnight-agent/README.md`; this page
+only records where it fits in the reliability stack.
 
 ## Liveness-gated stuck detection and orphan repair
 

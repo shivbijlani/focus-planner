@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/advertised-reply-word/disable-guard-allows",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "DisableGuard": [
+          "G16"
+        ],
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

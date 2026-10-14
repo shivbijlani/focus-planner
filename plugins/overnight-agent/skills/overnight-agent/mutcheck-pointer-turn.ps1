@@ -71,7 +71,7 @@
   script's own `-DisableGuard` hook; two are generated source mutants, because the fence mask
   and the opt-in have no hook and are the two behaviours most likely to be quietly wrong.
 
-  Usage: pwsh -File mutcheck-pointer-turn.ps1 [-Target <write-turn.ps1>] [-Oa <oa-state.ps1>]
+  Usage: pwsh -File mutcheck-pointer-turn.ps1 [-Target <write-turn.ps1|write-turn.mjs>] [-Oa <oa-state.ps1>]
   Exit:  0 all arms hold and every mutant is killed by exactly one arm - 1 otherwise.
 #>
 [CmdletBinding()]
@@ -111,6 +111,7 @@ $Oa = Resolve-First @(
   (Join-Path $here '../../skills/overnight-agent/oa-state.ps1'),
   $(if ($oaHome) { Join-Path $oaHome 'oa-state.ps1' })
 ) 'oa-state.ps1'
+. (Join-Path (Split-Path -Parent $Oa) 'oa-state-target.ps1')
 
 # The bridge sources are the acceptance-2 surface. Resolved from the repo, because the point of
 # arm G is to run the SHIPPING digest rather than a restatement of it.
@@ -271,11 +272,13 @@ function Invoke-WriteTurn {
   # NOTE for the documented `-Target <origin/main copy>` mode in the header: a pre-#560 script has
   # no `-Ask` parameter and will reject it. Run that comparison against a pre-#560 checkout of THIS
   # file too, or drop the flag for that one invocation.
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script,
-    '-Id', $Id, '-BodyFile', $BodyFile, '-JournalDir', $jdir, '-Ask', 'none', '-Json') + $Extra
+  $wtArgs = @('-Id', $Id, '-BodyFile', $BodyFile, '-JournalDir', $jdir, '-Ask', 'none', '-Json') + $Extra
+  # The Node port (write-turn.mjs, item 3) takes the same arguments and must pass the same arms.
+  $exe = if ($Script -like '*.mjs') { 'node' } else { $PsExe }
+  $all = if ($Script -like '*.mjs') { @($Script) + $wtArgs } else { @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $wtArgs }
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & $PsExe @all 2>&1 | Out-String -Width 4096 }
+  try { $out = & $exe @all 2>&1 | Out-String -Width 4096 }
   catch { $out = '' }
   finally { $script:LastExit = $LASTEXITCODE; $ErrorActionPreference = $prev; $global:LASTEXITCODE = 0 }
   $start = $out.IndexOf('{')
@@ -292,11 +295,12 @@ function Guards($r) {
 }
 
 function Invoke-Oa([string[]]$OaArgs) {
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Oa) + $OaArgs +
-  @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)
+  $cmd = Get-OaStateCommand $Oa
+  $all = @($cmd.Prefix + $OaArgs +
+  @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store))
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & $PsExe @all 2>&1 | Out-String -Width 8192 }
+  try { $out = & $cmd.Exe @all 2>&1 | Out-String -Width 8192 }
   catch { $out = '' }
   finally { $ErrorActionPreference = $prev; $global:LASTEXITCODE = 0 }
   return $out
@@ -439,17 +443,36 @@ function New-Mutant([string]$name, [string]$find, [string]$replace) {
   # An absent anchor is still a failure; it is simply reported as an unkilled mutant below.
   $src = [IO.File]::ReadAllText($Target)
   if ($src -notmatch [regex]::Escape($find)) { return $null }
-  $p = Join-Path $root "mutant-$name.ps1"
+  $dir = Join-Path $root "mutant-$name"
+  New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  $p = Join-Path $dir ([IO.Path]::GetFileName($Target))
+  # #804/G23 asks write-turn's sibling consent engine. Source mutants used to be copied as a
+  # lone file, making G23 fail closed on "engine not found" and causing every pointer arm to fail
+  # for the wrong reason. Copy the sibling engine beside the mutant so the matrix isolates G9-G11.
+  $sourceDir = Split-Path -Parent $Target
+  foreach ($sibling in @('oa-state.ps1', 'oa-state.mjs')) {
+    $sp = Join-Path $sourceDir $sibling
+    if (Test-Path $sp) { Copy-Item -LiteralPath $sp -Destination (Join-Path $dir $sibling) -Force }
+  }
+  $lib = Join-Path $sourceDir 'oa-state-lib'
+  if (Test-Path $lib) { Copy-Item -LiteralPath $lib -Destination (Join-Path $dir 'oa-state-lib') -Recurse -Force }
   [IO.File]::WriteAllText($p, $src.Replace($find, $replace), $utf8)
   return $p
 }
 
 # Fence mask -> identity: a doc-meta quoted inside a fenced example becomes a real binding.
-$mFence = New-Mutant 'fence' 'if ($fence) { $lines[$i] = '' '' * $lines[$i].Length }' '# mutated: fence mask removed'
-# Opt-in removed: every task is treated as doc-bound.
-$mOptIn = New-Mutant 'optin' '$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }' `
-  '$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
+# Opt-in removed: every task is treated as doc-bound. Each has a PowerShell and a Node anchor.
+if ($Target -like '*.mjs') {
+  $mFence = New-Mutant 'fence' 'if (fence) parts[i] = '' ''.repeat(parts[i].length);' '// mutated: fence mask removed'
+  $mOptIn = New-Mutant 'optin' 'let doc = dest ? journalDocMeta(dest) : null;' `
+    'let doc = dest ? journalDocMeta(dest) : null;
+  if (!doc) doc = { doc_id: ''MUTANT'', doc_url: '''' };'
+} else {
+  $mFence = New-Mutant 'fence' 'if ($fence) { $lines[$i] = '' '' * $lines[$i].Length }' '# mutated: fence mask removed'
+  $mOptIn = New-Mutant 'optin' '$doc = if ($dest) { Get-JournalDocMeta $dest } else { $null }' `
+    '$doc = if ($dest) { Get-JournalDocMeta $dest } else { $null }
 if (-not $doc) { $doc = [pscustomobject]@{ doc_id = ''MUTANT''; doc_url = '''' } }'
+}
 
 $mutants = @(
   @{ name = 'disable G9 (no size ceiling)'; extra = @('-DisableGuard', 'G9'); script = $Target; kills = 'B narrative refused by G9' },

@@ -1,0 +1,130 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-agent-gate"
+  ],
+  "cases": [
+    {
+      "id": "mc/agent-gate/allow-email-self",
+      "note": "allow-list rule grants send_email_self",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "114",
+        "Action": "send_email_self"
+      }
+    },
+    {
+      "id": "mc/agent-gate/floor-overrides-allow",
+      "note": "safety floor blocks send_email_many even when gate has allow rules",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "114",
+        "Action": "send_email_many"
+      }
+    },
+    {
+      "id": "mc/agent-gate/floor-overrides-human-approval",
+      "note": "safety floor beats a human-authored affirmative in the journal",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "109",
+        "Action": "delete_data",
+        "Repo": "sample-repo"
+      }
+    },
+    {
+      "id": "mc/agent-gate/repo-scope-allowed",
+      "note": "repo-scoped YOLO rule allows exactly sample-repo",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "114",
+        "Action": "merge_pr",
+        "Repo": "sample-repo"
+      }
+    },
+    {
+      "id": "mc/agent-gate/repo-scope-no-prefix",
+      "note": "repo-scoped rule does not apply to another repo",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "114",
+        "Action": "merge_pr",
+        "Repo": "sample"
+      }
+    },
+    {
+      "id": "mc/agent-gate/open-pr-is-not-merge",
+      "note": "open_pr allow rule does not authorize merge_pr",
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "consent",
+          "args": {
+            "Id": "114",
+            "Action": "open_pr",
+            "Repo": "focus-planner"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "consent",
+          "args": {
+            "Id": "114",
+            "Action": "merge_pr",
+            "Repo": "focus-planner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/agent-gate/human-spoke-pauses-allow",
+      "note": "gate allowance refuses when unread human text is below the newest turn",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "109",
+        "Action": "open_pr",
+        "Repo": "focus-planner"
+      }
+    },
+    {
+      "id": "mc/agent-gate/absent-gate-fail-closed",
+      "note": "missing gate file grants nothing and falls back to journal verdict",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "114",
+        "Action": "send_email_self",
+        "GatePath": "{data}\\no-such-gate.md"
+      }
+    },
+    {
+      "id": "mc/agent-gate/malformed-gate-fail-closed",
+      "note": "malformed gate grants nothing",
+      "files": {
+        "data/malformed-gate.md": "# Agent gate\n\njust prose, no sections\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "114",
+        "Action": "send_email_self",
+        "GatePath": "{data}\\malformed-gate.md"
+      }
+    },
+    {
+      "id": "mc/agent-gate/no-action-shape-unchanged",
+      "note": "omitting Action leaves the legacy consent shape without gate fields",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "109"
+      }
+    }
+  ]
+}

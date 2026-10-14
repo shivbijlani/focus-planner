@@ -48,6 +48,31 @@ function refuse(reason, extra = {}) {
   return { consent_ok: false, reason, ...extra }
 }
 
+/** The `google-doc` message ids in write-turn's sent-messages ledger, or a refusal. */
+export function readSentLedger(p) {
+  let text
+  try {
+    text = readFileSync(p, 'utf8')
+  } catch {
+    return { refuse: 'sent-ledger-unreadable', ids: [] }
+  }
+  const ids = []
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    let row
+    try {
+      row = JSON.parse(line)
+    } catch {
+      return { refuse: 'sent-ledger-malformed', ids: [] }
+    }
+    if (!row || typeof row.channel !== 'string' || typeof row.message_id !== 'string') {
+      return { refuse: 'sent-ledger-malformed', ids: [] }
+    }
+    if (row.channel.toLowerCase() === 'google-doc') ids.push(row.message_id)
+  }
+  return { refuse: null, ids }
+}
+
 /**
  * @param dumpPath  the `list_document_comments` output the run already fetched
  * @param docId     the bound doc, so the ledger is read for the right document
@@ -80,6 +105,18 @@ export function docConsent(dumpPath, docId, ledgerPaths = []) {
   const ledgers = []
   for (const p of ledgerPaths) {
     if (!p || !existsSync(p)) continue
+    // THE SENT-MESSAGES LEDGER (`<OA home>/sent-messages.jsonl`, kept by write-turn.mjs
+    // record-sent). The agent posts AS him on this channel, so the spec's rule is: a comment
+    // counts as his only when it has no agent signature AND its id is not in this ledger -- the
+    // ledger is what catches a forgotten signature. Every `google-doc` id in it is the agent's.
+    // Unlike the cache ledgers below, this one is a FLOOR: if it exists but cannot be read in
+    // full, a line it could not parse might be exactly the comment in question, so refuse.
+    if (/\.jsonl$/i.test(p)) {
+      const sent = readSentLedger(p)
+      if (sent.refuse) return refuse(sent.refuse, { ledger: p })
+      ledgers.push({ comments: sent.ids.map((id) => ({ id })) })
+      continue
+    }
     try {
       ledgers.push(ledgerForDoc(JSON.parse(readFileSync(p, 'utf8')), docId))
     } catch {

@@ -1,0 +1,215 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-awaiting-reply"
+  ],
+  "cases": [
+    {
+      "id": "mc/awaiting-reply/matrix",
+      "note": "Blocking Your call parks; dismissive and newest-closed asks do not; qualified offers stay visible; consumed replies unpark.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 910 | 🟡 | Task 910 | - | 2020-01-01 | |\n| 911 | 🟡 | Task 911 | - | 2020-01-01 | |\n| 930 | 🟡 | Task 930 | - | 2020-01-01 | |\n| 960 | 🟡 | Task 960 | - | 2020-01-01 | |\n| 970 | 🟡 | Task 970 | - | 2020-01-01 | |\n| 980 | 🟡 | Task 980 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-910.md": "# Task 910: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** nothing to act on tonight\n\n**Your call:** `1` or `2`\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-911.md": "# Task 911: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-930.md": "# Task 930: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none — but tell me if you would rather I draft the questions\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-960.md": "# Task 960: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** a decision on the vendor\n\n<!-- /overnight-agent turn-end -->\n\n## 🌙 Overnight Agent\n\n<!-- from: overnight-agent -->\nA later turn closed this out.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-970.md": "# Task 970: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** a decision on the vendor\n\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nuse the second vendor\n",
+        "data/journal/task-980.md": "# Task 980: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** nothing to act on\n\n**Your call:** ship it or hold it\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-910.json": {
+          "id": "910",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "e7d583048ca81fff6fc314607baab5d36919667183462d3faf1174dddff88f2a",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-911.json": {
+          "id": "911",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "2e9756960e553cb0a8f2db0c33083499ee1b6dda658f2923323cb56e6b9f71aa",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-930.json": {
+          "id": "930",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "fcf2ed14306b0b1e4f62da45f2093328ae19073523a47549a47a400a52e2bec4",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-960.json": {
+          "id": "960",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "e13e439e3407072e63a6a064b8bac7b6855c52f6b781624fd4aef050910af788",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-970.json": {
+          "id": "970",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "cfe9e883a971a680bcf0df4575051021093fd915683937861ebc438e98969c96",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-980.json": {
+          "id": "980",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "075273d64ea165baef532cf2723fec673ce8c1055134e5c4b1dd10e487362f2c",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "970",
+            "Status": "in-progress"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "mc/awaiting-reply/parked-today-opens-deferred",
+      "note": "A parked Today row is ineligible and releases Deferred work behind it.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 910 | 🟡 | Task 910 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n| 920 | ⚪ | Task 920 | - | 2020-01-01 | | |\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-910.md": "# Task 910: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** nothing to act on tonight\n\n**Your call:** `1` or `2`\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-920.md": "# Task 920: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-910.json": {
+          "id": "910",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "e7d583048ca81fff6fc314607baab5d36919667183462d3faf1174dddff88f2a",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-920.json": {
+          "id": "920",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "1628e27b23a9c7b64aa43732a3f26b8baf1588e2aa2ef0893c4dbb51e73d6ef2",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "TodayServedMinutes": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/awaiting-reply/reply-unparks",
+      "note": "A fresh user reply outranks awaiting_reply and makes the task eligible.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 940 | 🟡 | Task 940 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-940.md": "# Task 940: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** a decision on the vendor\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-940.json": {
+          "id": "940",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "5107f8c187b1d7f88ebe2d835d58b5a45cfad35b682dfd0538f9b79847bf2293",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-940.md": "\n## 2020-03-02\n\n<!-- from: me -->\ngo ahead\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "mc/awaiting-reply/due-poll-beats-park",
+      "note": "A due poll remains eligible even while the newest turn is awaiting a reply.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 950 | 🟡 | Task 950 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-950.md": "# Task 950: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** a decision on the vendor\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-950.json": {
+          "id": "950",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t950-v1",
+          "processed_file_hash": "563c3aff9c1e8d2aae9a3a74b3917286993405591786425252172e21bbd0adc0",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "2020-03-01T12:00:00Z",
+          "last_turn_by": "sess-test",
+          "poll": {
+            "cadence": "daily",
+            "interval_minutes": 1440,
+            "last_polled": "2020-03-01T00:00:00Z",
+            "next_due": "2020-03-02T00:00:00Z"
+          }
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan"
+        }
+      ]
+    }
+  ]
+}

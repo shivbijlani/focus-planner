@@ -1,0 +1,24 @@
+{
+  "files": {},
+  "id": "mc/coordinator-no-task-work/write-disable-g23-still-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Author": "coordinator-session",
+        "DisableGuard": [
+          "G23"
+        ],
+        "Id": "974",
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G23 line 1: task 974 has a pending human approval, but caller 'coordinator-session' is not the bound task session (task-session-974). The coordinator must dispatch it with `oa-state.ps1 session -Id 974 -ForDispatch ...`; the task session owns the approved work and writes the outcome turn. Unknown callers fail closed. This guard cannot be disabled",
+        "      | consent_ok=true (human-authored-affirmative)"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "cmd/whoami/unknown",
+  "steps": [
+    {
+      "command": "whoami",
+      "exit": 0,
+      "json": {
+        "role": "unknown",
+        "role_line": null,
+        "session_id": null,
+        "session_id_source": null,
+        "task_id": null,
+        "tasks": []
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -81,6 +81,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set.
+if ($env:OA_SANDBOX_ROOT) { throw 'oa_sandbox_violation: deploy-installed-plugin writes the live installed plugin; refused under OA_SANDBOX_ROOT' }
+
 if (-not (Test-Path $Repo))      { throw "repo not found: $Repo" }
 if (-not (Test-Path $Installed)) { throw "installed plugin not found: $Installed" }
 

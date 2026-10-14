@@ -1,0 +1,57 @@
+{
+  "files": {},
+  "id": "mc/board-linked/unreadable-board-not-none",
+  "steps": [
+    {
+      "args": {
+        "Id": "907",
+        "PlannerBoard": "<ROOT>/data/missing-planner.md"
+      },
+      "command": "extract",
+      "exit": 0,
+      "stdout": [
+        "# task-907 -- BOUNDED EXTRACT (read-only)",
+        "",
+        "source: <ROOT>/data/journal/task-907.md",
+        "source 0.1 KB / emitted 0.1 KB (ceiling 24 KB, ~0K tokens)",
+        "",
+        "This is a BOUNDED extract, not the whole journal. Every line below is VERBATIM from the source; nothing is summarised. Nothing was elided: this is the complete journal.",
+        "",
+        "## HEAD -- the user's framing",
+        "_Everything above the first machine turn: decisions, constraints, links._",
+        "",
+        "# Task 907: linked fixture",
+        "",
+        "User framing at the top.",
+        "",
+        "## OPEN ASKS (newest agent turn)",
+        "",
+        "(none)",
+        "",
+        "## USER MESSAGES (newest first)",
+        "_Attributed to the human. Later messages supersede earlier ones, so read top-down._",
+        "",
+        "(none positively attributed -- see HEAD and TRAILING)",
+        "",
+        "## LATEST AGENT TURN",
+        "_The newest turn only. Earlier turns are deliberately not read._",
+        "(empty)",
+        "",
+        "## TRAILING USER PROSE",
+        "_Below the turn-end stamp: the unanswered reply, if any._",
+        "",
+        "# Task 907: linked fixture",
+        "",
+        "User framing at the top.",
+        "",
+        "## POINTERS",
+        "",
+        "- status: (none stated)",
+        "- linked: (board not read -- no board file at <ROOT>/data/missing-planner.md; journal: no **Linked:** line). NOT a finding of 'no parent': re-run with -PlannerBoard pointing at planner.md before concluding this task has no upstream.",
+        "- deliverables next to this journal: (none)",
+        "- not shown: -0.1 KB of 0.1 KB"
+      ],
+      "tool": "oa-state"
+    }
+  ]
+}

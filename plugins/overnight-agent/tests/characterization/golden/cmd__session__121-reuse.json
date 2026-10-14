@@ -1,0 +1,43 @@
+{
+  "files": {},
+  "id": "cmd/session/121-reuse",
+  "steps": [
+    {
+      "args": {
+        "Id": "121"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 2,
+        "concurrency_source": "settings",
+        "created_at": "<NOW-1440m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "121",
+        "kickoff_continuation": null,
+        "kind": "code",
+        "last_woken_at": "<NOW-180m>",
+        "model": "auto",
+        "model_source": "settings",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "example/sync-lib",
+        "released": false,
+        "role_line": "You are the task session for planner task #121. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "state": "live",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-121\"",
+        "verdict": "reuse",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-121",
+        "workspace_missing": false,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

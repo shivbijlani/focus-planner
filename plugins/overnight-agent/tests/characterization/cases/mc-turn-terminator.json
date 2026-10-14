@@ -1,0 +1,168 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-turn-terminator"
+  ],
+  "cases": [
+    {
+      "id": "mc/turn-terminator/reopen-shapes",
+      "note": "Raw EOF text, app-shaped replies, and heading-only replies reopen; sibling turns do not.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 901 | 🟡 | Task 901 | - | 2020-01-01 | |\n| 902 | 🟡 | Task 902 | - | 2020-01-01 | |\n| 903 | 🟡 | Task 903 | - | 2020-01-01 | |\n| 904 | 🟡 | Task 904 | - | 2020-01-01 | |\n| 905 | 🟡 | Task 905 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-901.md": "# Task 901: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nWrote the thing.\n\n**Needs from you:** nothing.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-902.md": "# Task 902: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nWrote the thing.\n\n**Needs from you:** nothing.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-903.md": "# Task 903: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nWrote the thing.\n\n**Needs from you:** nothing.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-904.md": "# Task 904: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nWrote the thing.\n\n**Needs from you:** nothing.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-905.md": "# Task 905: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nWrote the thing.\n\n**Needs from you:** nothing.\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-901.json": {
+          "id": "901",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "f64093c97cd3958b96d9b649481046f2b8d7adbe142dc3bd31f442b3adb45720",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-902.json": {
+          "id": "902",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "4058878ffac0fedd447394b0ad2af676748a6899a531242a7b1514651fb57dd4",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-903.json": {
+          "id": "903",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "57c4d88ea6185e432f79288b76d66a01bf9519941017a8ca12a77e739d53dffa",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-904.json": {
+          "id": "904",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "039a5f827e194a780ca9061d88fdc8d050a563e0749715e966ca76fe30f8c02d",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-905.json": {
+          "id": "905",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "ff0109765ab274c3b3910a6bf499331a43f0a42833db5e189f3758a8cdf31ca8",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-901.md": "\n\napprove - go ahead please\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-902.md": "\n## 2020-03-02\n\n<!-- from: me -->\napprove\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-903.md": "\n## 2020-03-02\n\napprove\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-905.md": "\n## 2020-03-02\n\n<!-- from: dance-church -->\nposted 3 classes\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "mc/turn-terminator/mark-stamps-terminator",
+      "note": "mark appends the turn-end terminator and does not rewrite the existing turn.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 906 | 🟡 | Task 906 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-906.md": "# Task 906: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nWrote the thing.\n\n**Needs from you:** nothing.\n",
+        "state/task-906.json": {
+          "id": "906",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "9238441635f8ed7ee6121c3172789c9a9ef1df92e1983636e9bdf726f8f3787c",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "906"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/turn-terminator/no-stamp-over-reply",
+      "note": "mark does not stamp past an already-unanswered reply below the agent turn.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 907 | 🟡 | Task 907 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-907.md": "# Task 907: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nWrote the thing.\n\n**Needs from you:** nothing.\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-907.json": {
+          "id": "907",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "7b5de1fab92bf536effe7f3ce9ee8eda7aa1298b069bc56ad4b78f43b91384d1",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "907"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    }
+  ]
+}

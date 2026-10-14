@@ -1,0 +1,28 @@
+{
+  "files": {},
+  "id": "mc/coordinator-no-task-work/write-no-approval-coordinator-allowed",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Author": "coordinator-session",
+        "Id": "972",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "972",
+        "length": 165,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

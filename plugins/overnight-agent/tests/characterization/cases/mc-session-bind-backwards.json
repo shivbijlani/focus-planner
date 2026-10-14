@@ -1,0 +1,460 @@
+{
+  "fixture": "mc-session-bind-backwards",
+  "covers": [
+    "mutcheck-session-bind-backwards"
+  ],
+  "cases": [
+    {
+      "id": "mc/session-bind-backwards/forward-lineage",
+      "note": "forward replacements bind newest session and accumulate retired lineage",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 910 | task 910 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-910.md": "# Task 910: task 910\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-910-1/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-910-2/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-910-3/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-910-4/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "910",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-910-1",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "910",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "910",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-910-2",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "910",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "910",
+            "SessionId": "33333333-3333-4333-8333-333333333333",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-910-3",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "910"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-bind-backwards/immediate-ancestor-refused",
+      "note": "rebinding immediate retired ancestor is refused and binding stays newest",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 911 | task 911 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-911.md": "# Task 911: task 911\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-911.json": {
+          "id": "911",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t911-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-911-1/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-911-2/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-911-3/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-911-4/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "911",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-911-1",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "911",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "911",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-911-2",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "911",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "911",
+            "SessionId": "33333333-3333-4333-8333-333333333333",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-911-3",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "911",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-911-2",
+            "WorkspaceType": "worktree"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "911"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-bind-backwards/grand-ancestor-and-force-refused",
+      "note": "rebinding any retired ancestor is refused even with Force",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 912 | task 912 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-912.md": "# Task 912: task 912\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-912.json": {
+          "id": "912",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t912-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-912-1/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-912-2/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-912-3/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-912-4/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "912",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-912-1",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "912",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "912",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-912-2",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "912",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "912",
+            "SessionId": "33333333-3333-4333-8333-333333333333",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-912-3",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "912",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-912-1",
+            "WorkspaceType": "worktree"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "912",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-912-2",
+            "WorkspaceType": "worktree",
+            "Force": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-bind-backwards/new-session-after-chain",
+      "note": "a never-used session id still binds after replacements",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 913 | task 913 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-913.md": "# Task 913: task 913\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-913.json": {
+          "id": "913",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t913-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-913-1/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-913-2/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-913-3/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-913-4/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "913",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-913-1",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "913",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "913",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-913-2",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "913",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "913",
+            "SessionId": "33333333-3333-4333-8333-333333333333",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-913-3",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "913",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "913",
+            "SessionId": "44444444-4444-4444-8444-444444444444",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-913-4",
+            "WorkspaceType": "worktree"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-bind-backwards/legacy-prior-refused",
+      "note": "legacy single prior_session_id without prior_session_ids still blocks backward bind",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 914 | task 914 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-914.md": "# Task 914: task 914\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "home/worktrees/wt-914-old/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-914-prior/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "state/task-914.json": "{\n  \"id\": \"914\",\n  \"status\": \"in-progress\",\n  \"status_by\": \"agent\",\n  \"version\": 1,\n  \"plan_id\": \"t914-v1\",\n  \"processed_file_hash\": \"\",\n  \"has_agent_block\": true,\n  \"seeded\": false,\n  \"updated\": \"2020-03-01T12:00:00Z\",\n  \"session\": {\n    \"session_id\": \"33333333-3333-4333-8333-333333333333\",\n    \"kind\": \"code\",\n    \"project\": \"focus-planner\",\n    \"workspace\": \"{{ROOT_JSON}}\\\\lad\\\\overnight-agent\\\\worktrees\\\\wt-914-old\",\n    \"workspace_type\": \"worktree\",\n    \"created_at\": \"2020-03-01T12:00:00Z\",\n    \"last_woken_at\": \"\",\n    \"state\": \"dead\",\n    \"prior_session_id\": \"22222222-2222-4222-8222-222222222222\",\n    \"replaced_at\": \"2020-03-02T12:00:00Z\"\n  }\n}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "914",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-914-prior",
+            "WorkspaceType": "worktree"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "914"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -291,6 +291,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set. Reaping acts on
+# every process on the machine, which no sandbox can contain, so a sandbox run reports a no-op
+# in the same one-line JSON shape and kills nothing.
+if ($env:OA_SANDBOX_ROOT) {
+    [ordered]@{ sandbox = $true; scanned = 0; matched = 0; stale = 0; killed = 0; freedMB = 0
+        dryRun = $true; note = 'process reaping is machine-wide; skipped under OA_SANDBOX_ROOT' } |
+        ConvertTo-Json -Compress
+    exit 0
+}
+
 function ConvertTo-ProcessStartTime {
     # Win32_Process.CreationDate comes back as a real DateTime from Get-CimInstance but as a DMTF
     # string ("20260822033051.000000-420") from the older Get-WmiObject / raw WMI paths. Handle

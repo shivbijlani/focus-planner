@@ -345,11 +345,61 @@ body {
   color: #fff;
 }
 
+.file.with-role {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.file-icon {
+  flex-shrink: 0;
+}
+
+.file-details {
+  min-width: 0;
+}
+
+.file-role {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.file-name {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .content {
   flex: 1;
   padding: 2rem;
   overflow-y: auto;
   scrollbar-gutter: stable;
+}
+
+.source-notice,
+.source-reconnect-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fcd34d;
+  font-size: 0.9rem;
+}
+.source-notice button,
+.source-reconnect-notice button {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.35rem 0.65rem;
+  background: rgba(245, 158, 11, 0.18);
+  color: inherit;
+  cursor: pointer;
 }
 
 /* Mission statement: a tasteful "north star" banner pinned at the top of the
@@ -1399,6 +1449,218 @@ tr.highlight-flash {
   background: #6ec1ff;
 }
 
+/* Docs §3.2: the 📄 catch-up icon's badge is about the doc — blue dot for an unread
+   revision, red ! when a comment came back `needs-you`. */
+.doc-badge-unread {
+  color: #8ab4f8;
+  background: #8ab4f8;
+  font-size: 0.45em;
+}
+
+.doc-badge-needs {
+  color: #fff;
+  background: #e5484d;
+  font-weight: 800;
+}
+
+.journal-link-doc {
+  position: relative;
+  text-decoration: none;
+}
+
+/* 🤖 agent session link (docs/spec/Domain-agent-metadata.md). Same weight as the other row
+   icons; a link whose PC has not refreshed it recently is dimmed further, never removed. */
+.agent-session-link.is-stale {
+  opacity: 0.4;
+}
+
+/* Lanes (docs/spec/Domain-lanes.md): a quiet pill in the snooze badge's shape. Only rendered
+   when agent-lanes.json exists, so a single-PC board never shows one. */
+.lane-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  margin-left: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid rgba(167, 243, 208, 0.24);
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.1);
+  color: #a7f3d0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.lane-chip-waiting {
+  border-color: rgba(253, 230, 138, 0.28);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+}
+
+.lane-chip-problem {
+  border-color: rgba(252, 165, 165, 0.3);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+
+.lane-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lanes-banner {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(252, 165, 165, 0.3);
+  border-radius: 8px;
+  background: rgba(248, 113, 113, 0.1);
+  color: #fecaca;
+  font-size: 0.85rem;
+}
+
+.lanes-title {
+  margin: 0 0 0.35rem;
+}
+
+.lanes-devices {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.lanes-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+
+.lanes-device-name {
+  font-weight: 600;
+}
+
+.lanes-device-seen {
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
+.lanes-device-seen.is-stale {
+  opacity: 0.55;
+}
+
+.lanes-add input {
+  width: 9rem;
+}
+
+.lanes-hint,
+.lanes-warning,
+.lanes-error {
+  font-size: 0.78rem;
+}
+
+.lanes-warning {
+  color: #fde68a;
+}
+
+.lanes-error {
+  color: #fecaca;
+}
+
+.lane-picker-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+span.agent-session-link {
+  cursor: default;
+}
+
+.agent-session-multi {
+  position: relative;
+  display: inline-flex;
+}
+
+.agent-session-count {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.agent-session-menu {
+  position: absolute;
+  top: 1.6em;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 12em;
+  padding: 4px;
+  border-radius: 6px;
+  background: #13284d;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.agent-session-menu-item {
+  display: block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: inherit;
+  opacity: 0.9;
+}
+
+.agent-session-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
+}
+
+/* Journal header trio: 💬 · 📔 (here) · 📄 */
+.jc-trio {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+
+.jc-trio-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 17px;
+  font-size: 18px;
+  text-decoration: none;
+}
+
+.jc-trio-link.is-current {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* On phones the app bar's 📔 avatar already says "you are in the journal". */
+@media (max-width: 768px) {
+  .jc-trio-link.is-current { display: none; }
+}
+
+.jc-trio-link .journal-badge {
+  bottom: 2px;
+  right: 2px;
+  font-size: 10px;
+}
+
 .todo-preview {
   display: flex;
   align-items: center;
@@ -1804,6 +2066,14 @@ tr.highlight-flash {
 
 .context-menu-icon {
   font-size: 1rem;
+}
+
+.journal-link-briefing {
+  font-size: 1rem;
+}
+
+.briefing-action {
+  font-size: 1.15rem;
 }
 
 /* --- Mobile bottom sheet (#335) ------------------------------------------ */
@@ -4076,6 +4346,12 @@ tr.highlight-flash {
 .settings-diagnostics-msg {
   font-size: 0.75rem;
   color: #34d399;
+}
+
+.settings-link-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .settings-diagnostics-output {

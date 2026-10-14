@@ -77,6 +77,8 @@ param(
   [string]$Manifest,
   [string]$Capability,
   [string]$Account,
+  [string]$AgentAddress,
+  [string]$UserSettings,
   [int]$TimeoutSec = 45,
   [string]$ProberCommand = 'node',
   [string]$ProberScript
@@ -111,6 +113,7 @@ $manifestPath = Resolve-First @(
   $Manifest,
   (Join-Path $here 'run-capabilities.json'),
   (Join-Path $here '..\..\skills\overnight-agent\run-capabilities.json'),
+  (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'run-capabilities.json'),
   (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\run-capabilities.json')
 )
 
@@ -118,6 +121,7 @@ $proberPath = Resolve-First @(
   $ProberScript,
   (Join-Path $here 'mcp-probe.mjs'),
   (Join-Path $here '..\..\checks\mcp-probe.mjs'),
+  (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'mcp-probe.mjs'),
   (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\mcp-probe.mjs')
 )
 
@@ -442,6 +446,113 @@ function Test-EmailInbox {
     -Unread $messages.Count -ElapsedMs $sw.ElapsedMilliseconds
 }
 
+function Test-GmailInbox {
+  param($Cap)
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $server = [string]$Cap.server
+  $fail = {
+    param($Reason, $Detail)
+    New-UnreadableRow -Id $Cap.id -Server $server -Mandatory ([bool]$Cap.mandatory) `
+      -Reason $Reason -Detail $Detail -ElapsedMs $sw.ElapsedMilliseconds
+  }
+  $account = $Account
+  $address = $AgentAddress
+  if (-not $account -or -not $address) {
+    $settings = Resolve-First @(
+      $UserSettings,
+      $env:OVERNIGHT_AGENT_SETTINGS,
+      (Join-Path (Get-Location).Path 'user-settings.md'),
+      (Join-IfSet $env:OneDrive 'Apps\Focus Planner\user-settings.md'),
+      (Join-IfSet $env:OneDriveConsumer 'Apps\Focus Planner\user-settings.md'),
+      (Join-IfSet $env:OneDriveCommercial 'Apps\Focus Planner\user-settings.md'),
+      (Join-IfSet $env:USERPROFILE 'OneDrive\Apps\Focus Planner\user-settings.md'),
+      (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'user-settings.md'),
+      (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\user-settings.md')
+    )
+    if ($UserSettings -and -not (Test-Path -LiteralPath $UserSettings)) {
+      return & $fail 'settings-missing' "not found: $UserSettings"
+    }
+    if ($settings) {
+      $text = [IO.File]::ReadAllText($settings)
+      foreach ($name in @('Agent email Google account', 'Agent email account')) {
+        $match = [regex]::Match($text, '(?im)^\s*\|\s*' + [regex]::Escape($name) + '\s*\|\s*([^|\r\n]*)\|')
+        if ($match.Success) {
+          $cell = $match.Groups[1].Value.Trim()
+          $fenced = [regex]::Match($cell, '`([^`]*)`')
+          $value = if ($fenced.Success) { $fenced.Groups[1].Value.Trim() } else { $cell }
+          if ($name -eq 'Agent email Google account' -and -not $account) { $account = $value }
+          if ($name -eq 'Agent email account' -and -not $address) { $address = $value }
+        }
+      }
+    }
+  }
+  if ($account -notmatch '^[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+$') {
+    return & $fail 'account-missing' 'Set Agent email Google account to the authorized backing Gmail address, or pass -Account. No personal-Google or legacy-email fallback.'
+  }
+  if ($address -notmatch '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$') {
+    return & $fail 'agent-address-missing' 'Set Agent email account to the agent alias, or pass -AgentAddress. The backing mailbox is not an instruction backlog.'
+  }
+  $query = "in:inbox is:unread to:$address"
+
+  $ids = @()
+  $tokens = @()
+  $token = $null
+  $limit = [int]$Cap.probe.limit
+  if ($limit -lt 1) { return & $fail 'manifest-invalid' 'Gmail page limit must be positive' }
+  for ($page = 0; $page -lt 20; $page++) {
+    $args = @{ user_google_email = $account; query = $query; page_size = $limit }
+    if ($token) { $args.page_token = $token }
+    $session = Invoke-McpSession -Server $server -Steps @(
+      @{ name = [string]$Cap.probe.healthTool; arguments = @{ user_google_email = $account; compact = $true; include_system = $true } },
+      @{ name = [string]$Cap.probe.searchTool; arguments = $args }
+    )
+    if (-not $session.Ok) { return & $fail $session.Reason $session.Detail }
+    $health = @($session.Steps)[0]
+    $search = @($session.Steps)[1]
+    # Compact labels are a real authenticated Gmail read, not tools/list.
+    if (-not $health.Ok) { return & $fail $health.Reason $health.Detail }
+    $labels = $health.Payload
+    if ($labels.PSObject.Properties.Name -notcontains 'labels' -or
+        $labels.PSObject.Properties.Name -notcontains 'count' -or
+        @($labels.labels).Count -ne $labels.count -or
+        @($labels.labels | Where-Object { $_.id -eq 'INBOX' }).Count -ne 1) {
+      return & $fail 'probe-failed' 'Gmail labels did not positively confirm INBOX'
+    }
+    if (-not $search.Ok) { return & $fail $search.Reason $search.Detail }
+    $body = $search.Payload
+    if ($body.PSObject.Properties.Name -contains 'result') { $body = $body.result }
+    if ($body -isnot [string]) { return & $fail 'unparsable' 'Gmail search did not return its documented text response' }
+    $escapedQuery = [regex]::Escape($query)
+    $header = [regex]::Match($body, "^Found (\d+) messages matching '$escapedQuery':")
+    $empty = $body -match "^No messages found for query: '$escapedQuery'\s*$"
+    $matches = [regex]::Matches($body, '(?m)^\s+\d+\.\s+Message ID: ([a-f0-9]+)\s*$')
+    if (-not $empty -and (-not $header.Success -or $matches.Count -ne [int]$header.Groups[1].Value)) {
+      return & $fail 'unparsable' 'Gmail search count/message IDs were missing or inconsistent'
+    }
+    $pageIds = @($matches | ForEach-Object { $_.Groups[1].Value })
+    if (@($pageIds | Where-Object { $ids -contains $_ }).Count -gt 0 -or
+        @($pageIds | Select-Object -Unique).Count -ne $pageIds.Count) {
+      return & $fail 'pagination-invalid' 'Gmail repeated a message ID across pages'
+    }
+    $ids += $pageIds
+    $next = [regex]::Match($body, "page_token='([^']+)'")
+    if (-not $next.Success) {
+      if ($matches.Count -ge $limit) { return & $fail 'truncated' 'Full Gmail page without continuation; unread total unknown' }
+      $row = New-Row -Id $Cap.id -Server $server -Mandatory ([bool]$Cap.mandatory) -Kind 'gmail-inbox' `
+        -Verdict 'checked' -Reason '' -Detail "Authenticated Gmail labels and alias-scoped unread search ($address) in the same session on every page for $account" `
+        -Unread $ids.Count -ElapsedMs $sw.ElapsedMilliseconds
+      $row | Add-Member -NotePropertyName messageIds -NotePropertyValue @($ids)
+      return $row
+    }
+    $token = $next.Groups[1].Value
+    if ($tokens -contains $token -or $matches.Count -eq 0) {
+      return & $fail 'pagination-invalid' 'Gmail continuation repeated or accompanied an empty page'
+    }
+    $tokens += $token
+  }
+  return & $fail 'truncated' 'Gmail exceeded the 20-page bound; unread total unknown'
+}
+
 function Test-McpTools {
   param($Cap)
   # WHAT THIS PROVES, AND WHAT IT DOES NOT (GH #570)
@@ -621,6 +732,7 @@ function Resolve-Verdict {
     $kind = [string]$cap.probe.kind
     switch ($kind) {
       'email-inbox' { $rows += (Test-EmailInbox $cap) }
+      'gmail-inbox' { $rows += (Test-GmailInbox $cap) }
       'mcp-tools'   { $rows += (Test-McpTools $cap) }
       'script-exit' { $rows += (Test-ScriptExit $cap) }
       'delegated'   { $rows += (Test-Delegated $cap) }
@@ -631,13 +743,13 @@ function Resolve-Verdict {
     }
   }
 
-  $inbox = @($rows | Where-Object { $_.kind -eq 'email-inbox' }) | Select-Object -First 1
+  $inbox = @($rows | Where-Object { $_.kind -in @('email-inbox', 'gmail-inbox') }) | Select-Object -First 1
   # `inconclusive` is deliberately NOT a failure: it means a probe ran and could not form an
   # opinion (a transient network error), and raising a mandatory ask on that is how a check
   # becomes the one nobody reads. It is still reported in its own right, so it can never be
   # mistaken for a clean pass.
   $badMandatory = @($rows | Where-Object { $_.mandatory -and ($_.verdict -ne 'checked') -and ($_.verdict -ne 'available') -and ($_.verdict -ne 'delegated') -and ($_.verdict -ne 'inconclusive') })
-  $code = if ($badMandatory.Count -gt 0) { 2 } else { 0 }
+  $code = if ($badMandatory.Count -gt 0 -or (-not $inbox -and (-not $Capability -or $Capability -eq 'email'))) { 2 } else { 0 }
 
   return [pscustomobject]@{
     Rows = @($rows); Inbox = $inbox; ExitCode = $code
@@ -666,6 +778,7 @@ $result = [pscustomobject]@{
   checkedAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   verdict      = if ($inboxRow) { $inboxRow.verdict } else { 'unreadable' }
   unread       = if ($inboxRow) { $inboxRow.unread } else { $null }
+  messageIds   = if ($inboxRow.messageIds) { @($inboxRow.messageIds) } else { @() }
   reason       = if ($inboxRow) { $inboxRow.reason } else { 'no-inbox-capability' }
   detail       = if ($inboxRow) { $inboxRow.detail } else { 'no capability with probe.kind email-inbox' }
   ask          = ($resolved.ExitCode -ne 0)

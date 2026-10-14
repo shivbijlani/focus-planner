@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { TARGET_STATUS, PROVIDERS, syncStatusEqual } from './storage.js'
+const engineStatus = vi.hoisted(() => ({ current: {} }))
+vi.mock('../../packages/folder-sync/src/index.js', async importOriginal => ({
+  ...await importOriginal(),
+  createSyncEngine: () => ({
+    get status() { return engineStatus.current },
+    subscribe: listener => { listener(engineStatus.current); return () => {} },
+  }),
+}))
+
+import { TARGET_STATUS, PROVIDERS, syncStatusEqual, getSyncStatus } from './storage.js'
 
 const LOCAL_FOLDER_ID = 'browser-storage'
 
@@ -19,6 +28,22 @@ function status(oneDrive, googleDrive = TARGET_STATUS.DISCONNECTED, aggregate) {
 }
 
 describe('syncStatusEqual', () => {
+  it('surfaces local replica failures rather than showing idle connected targets as backed up', () => {
+    engineStatus.current = {
+      state: 'error',
+      error: 'Local IndexedDB write failed',
+      providers: {
+        onedrive: { connected: true, state: 'idle' },
+        'google-drive': { connected: true, state: 'idle' },
+      },
+    }
+    const mapped = getSyncStatus()
+    expect(mapped.aggregate).toBe(TARGET_STATUS.ERROR)
+    for (const target of Object.values(mapped.folders[LOCAL_FOLDER_ID].targets)) {
+      expect(target.status).toBe(TARGET_STATUS.ERROR)
+      expect(target.message).toBe('Local IndexedDB write failed')
+    }
+  })
   it('treats two freshly-built identical statuses as equal (dedupe case)', () => {
     // The SW re-emits status on every nudge; mapEngineStatus returns a new
     // object each time. Different references, same meaning must compare equal.

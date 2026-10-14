@@ -1,0 +1,64 @@
+{
+  "files": {
+    "state/task-121.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "121",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t121-v1",
+        "processed_file_hash": "ec93ed6b248f1ea4b8bc59180eaf9c7badafe464d3a6548a2ca7647c4bb8c25e",
+        "seeded": false,
+        "session": null,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "cmd/session/121-release",
+  "steps": [
+    {
+      "args": {
+        "Id": "121",
+        "SessionRelease": true
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": false,
+        "concurrency": 2,
+        "concurrency_source": "settings",
+        "created_at": null,
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "121",
+        "kickoff_continuation": null,
+        "kind": null,
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "settings",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": true,
+        "role_line": "You are the task session for planner task #121. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": null,
+        "state": null,
+        "teardown_command": null,
+        "verdict": "create",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": null
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

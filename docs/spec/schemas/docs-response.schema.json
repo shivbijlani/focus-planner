@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://focus-planner.invalid/schemas/docs-response.schema.json",
+  "title": "Focus Planner Docs response",
+  "description": "Publisher-owned revision summaries, comment dispositions, and review acknowledgement.",
+  "type": "object",
+  "required": ["version", "rev", "revisions", "dispositions"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "rev": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "revisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/revision"
+      }
+    },
+    "dispositions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^c_[A-Za-z0-9_-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/disposition"
+      }
+    },
+    "ackedReview": {
+      "type": ["string", "null"],
+      "pattern": "^rv_[A-Za-z0-9_-]+$"
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "revision": {
+      "type": "object",
+      "required": ["rev", "at", "summary"],
+      "properties": {
+        "rev": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "disposition": {
+      "type": "object",
+      "required": ["status", "rev", "blocks"],
+      "properties": {
+        "status": {
+          "enum": ["answered", "done", "needs-you", "declined"]
+        },
+        "rev": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^b[1-9][0-9]*$"
+          }
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

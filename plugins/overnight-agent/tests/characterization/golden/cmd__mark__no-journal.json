@@ -1,0 +1,18 @@
+{
+  "files": {},
+  "id": "cmd/mark/no-journal",
+  "steps": [
+    {
+      "args": {
+        "Id": "999"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "no journal at <ROOT>/data/journal/task-999.md"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

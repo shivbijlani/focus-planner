@@ -1,0 +1,60 @@
+{
+  "files": {
+    "state/task-978.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "978",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "coordinator-session",
+        "paused_at": "<NOW+0m>",
+        "plan_id": "t978-v1",
+        "processed_file_hash": "4b69df607cc96e837fcbbe485dbc83b82e7a3630c9c95965e89f2e764f815b17",
+        "seeded": false,
+        "session": {
+          "prior_session_id": "",
+          "session_id": "task-session-978"
+        },
+        "status": "blocked",
+        "status_by": "user",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/coordinator-no-task-work/mark-status-by-user-allowed",
+  "steps": [
+    {
+      "args": {
+        "Id": "978",
+        "Status": "blocked",
+        "StatusBy": "user",
+        "TurnBy": "coordinator-session"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "978",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "coordinator-session",
+        "paused_at": "<NOW+0m>",
+        "plan_id": "t978-v1",
+        "processed_file_hash": "4b69df607cc96e837fcbbe485dbc83b82e7a3630c9c95965e89f2e764f815b17",
+        "seeded": false,
+        "session": {
+          "prior_session_id": "",
+          "session_id": "task-session-978"
+        },
+        "status": "blocked",
+        "status_by": "user",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

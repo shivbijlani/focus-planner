@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/snooze-write/malformed-store-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "9406",
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G22 line 1: cannot verify the snooze store; fix snooze.json. A malformed snooze.json could hide a task the user explicitly postponed, so write-turn refuses to append a turn until the store is readable. This guard cannot be disabled",
+        "      | snooze.json"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

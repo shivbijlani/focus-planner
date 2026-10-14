@@ -1,0 +1,56 @@
+{
+  "files": {},
+  "id": "cmd/extract/123-legacy",
+  "steps": [
+    {
+      "args": {
+        "Id": "123",
+        "Json": true
+      },
+      "command": "extract",
+      "exit": 0,
+      "json": {
+        "board_note": "no board row for task 123",
+        "board_path": "<ROOT>/data/planner.md",
+        "board_read": true,
+        "board_row_found": false,
+        "ceiling_bytes": 24576,
+        "deliverables": [],
+        "elided_bytes": 87,
+        "emitted_bytes": 309,
+        "has_agent_block": true,
+        "head": {
+          "elided_bytes": 0,
+          "text": "# Task 123: Old legacy task\n\nFrom before provenance stamps.\n\n---\n",
+          "truncated": false
+        },
+        "id": "123",
+        "latest_turn": {
+          "elided_bytes": 0,
+          "text": "## Overnight Agent\n\n**Status:** In progress - plan v3\n\n<!-- oa-state\n{\"status\":\"in-progress\",\"version\":3,\"plan_id\":\"t123-v3\"}\n-->\n\n### Run log\n**2020-02-01 (overnight):**\n- did a thing\n\n",
+          "truncated": false
+        },
+        "linked": [],
+        "linked_board": [],
+        "linked_journal": [],
+        "open_asks": [],
+        "path": "<ROOT>/data/journal/task-123.md",
+        "source_bytes": 396,
+        "status": "In progress - plan v3",
+        "trailing_user": {
+          "elided_bytes": 0,
+          "text": "## 2020-02-02\n\nRaw text with no provenance marker at all.\n",
+          "truncated": false
+        },
+        "user_messages": {
+          "dropped": 0,
+          "elided_bytes": 0,
+          "newest_first": [],
+          "shown": 0,
+          "total": 0
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

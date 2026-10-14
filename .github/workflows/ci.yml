@@ -37,6 +37,18 @@ jobs:
       - name: Production build
         run: npm run build
 
+  server-test-windows:
+    name: Server API tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test -- server.test.js
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -55,6 +67,49 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
+  # Real-browser smoke suite for the app's mainline flows (e2e/, see README
+  # "Testing"). The 75 vitest files and the mutation checks never load the app
+  # in a browser; this is the gate that stops a refactor silently breaking the
+  # board, journals, editors or persistence. Browser Storage only: no OAuth.
+  smoke:
+    name: App smoke (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-chromium
+      - name: Install Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - name: Smoke tests
+        run: npm run test:smoke
+      - name: Docs embedded host and draft isolation
+        run: npx playwright test --config playwright.docs-seams.config.js
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
   # The browser slot table (GH #180) lives in ONE place -- `## Browser slots` in
   # user-settings.md -- and is read by ONE parser. Before this job existed, the
   # only thing standing between that table and three scripts quietly re-encoding
@@ -73,6 +128,45 @@ jobs:
       - name: Mutation check (one table, one reader)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-browser-slots.ps1
+
+  browser-profile-shortcuts:
+    name: Browser profile shortcuts
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (account names and profile-target cleanup)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-browser-profile-shortcuts.ps1
+
+  # GH #738: each Playwright MCP slot launches its OWN profile directly
+  # (`--browser msedge --user-data-dir <dir>`) instead of attaching to a shared
+  # CDP debug port. set-playwright-browser-profiles.ps1 is the one script that
+  # rewrites mcp-config.json for that switch, and this proves it is a one-way
+  # door: no `--cdp-endpoint` survives on a switched server, the safety gates
+  # (BOM preservation, a strict Node JSON.parse before accepting the write) are
+  # load-bearing, and a second run is idempotent. Pure text + a Node parse
+  # probe, so it runs on the Linux runner; the real mcp-config.json is never
+  # read or written.
+  playwright-browser-profiles:
+    name: Playwright MCP profile-launch config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (one path, no CDP fallback)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-set-playwright-browser-profiles.ps1
+
+  machine-hygiene:
+    name: Opt-in machine hygiene
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: WhatIf and cache-only exclusion mutcheck
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-machine-hygiene.ps1
 
   # PHASE 0's mandated inbox check (GH #346) is the user's out-of-band channel into an
   # overnight run, and its old implementation could not fail: a search on an unhealthy
@@ -115,6 +209,37 @@ jobs:
       - name: Mutation check (an unreadable inbox is not an empty one)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-inbox-check.ps1
+
+  critical-tools:
+    name: Critical tool outage guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Real-call probe, outage transitions, settings and tray
+        run: node ./plugins/overnight-agent/checks/mutcheck-critical-tools.mjs
+      - name: Agent Gmail identity, signature and handled-message receipts
+        run: node ./plugins/overnight-agent/checks/test-agent-email.mjs
+
+  # Scheduling decisions must outlive the run that made them (GH #561). The ordered worklist,
+  # each row's eligibility and the reason a higher-ranked row was skipped used to exist only in
+  # memory, so "why did this run pick Deferred #362 while Today #245 sat there?" was a multi-hour
+  # reconstruction that only worked while the state happened not to have moved.
+  decision-record:
+    name: Per-run scheduling decision record
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (the record is appended, bounded, and names every Today row)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-decision-record.ps1
+      - name: Mutation check (run-gap detection reads run starts, not decision lines)
+        run: node ./plugins/overnight-agent/checks/mutcheck-run-gap.mjs
 
   # A truncated Google Tasks read must not read as a small backlog (GH #524).
   # The Tasks API silently caps a bare list_tasks at a 20-item first page, and a
@@ -292,6 +417,29 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-binding.ps1
 
+  # `scan` is the first step of PHASE 1 and PHASE 2, so a scan that is too slow to read and a
+  # scan that crashed produce the SAME outcome -- a run that dispatches nothing -- and only one
+  # of them looks like a failure (GH #711). Measured live 2026-09-28: 224 s and 507 KB against a
+  # coordinator whose tool calls wait 30-120 s; the run abandoned the scan twice and still
+  # reported success.
+  #
+  # The guard builds a 300-journal synthetic corpus in a temp dir and times the real script
+  # against it, so it never touches the planner folder or the live state store and runs
+  # unmodified on the Linux runner. Its fourth arm re-times a COPY with the memo table disabled
+  # and requires it to be measurably slower -- without that arm this job would keep passing after
+  # the optimisation was deleted, which is the one way a perf test is worse than no test.
+  #
+  # The budget is deliberately looser than the local target: a shared runner is slower and
+  # noisier than a laptop, and a threshold that flakes is a threshold people disable.
+  scan-perf:
+    name: Scan performance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (scan stays readable and fast)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-scan-perf.ps1 -BudgetSeconds 120
+
   # Changing a poll/recheck cadence must not make a task MORE aggressive (GH #506).
   #
   # Measured live 2026-09-04: moving task 468 from a 2h poll to 6h -- done deliberately to stop it
@@ -312,6 +460,49 @@ jobs:
       - name: Mutation check (lengthening a cadence must not make it due now)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-cadence-rearm.ps1
+
+  # PHASE 0 runs in parallel, so the lock must not serialize it (GH #778).
+  #
+  # Measured live 2026-09-29 (v1.57.19). The coordinator starts its PHASE 0 steps together by
+  # design; at 13:02:06 the capability record, `scan -Compact`, the Google Tasks collection and
+  # the Telegram sync-down all landed in the same second. Every `oa-state.ps1` command took the
+  # single state mutex with a 10 s fail-fast, so `check-critical-tools.mjs --record` queued behind
+  # a 60-90 s traversal of a store it never reads and died with `state_lock_timeout`. It failed
+  # twice and succeeded on the third try; the 12:00 run lost `decisions -RunId ...` the same way.
+  # Every retry is a model turn, and one more would have been a false "couldn't record".
+  #
+  # The guard holds the REAL state lock (same key derivation) and proves the scoping both ways:
+  # `critical-tools` and `decisions` complete while it is held, a genuine state command WAITS and
+  # then succeeds rather than handing back a retry, and that wait is still bounded so a stuck
+  # holder is reported. Hermetic: its own temp state dir, settings, MCP config and ledger.
+  phase0-lock-scope:
+    name: PHASE 0 lock scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (a capability record must not queue behind the scan)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-phase0-lock-scope.ps1
+
+  # The two state engines exclude each other (#124 cut-over). oa-state.ps1 locked the store with a
+  # named mutex and oa-state.mjs with a lock FILE, so each excluded only its own kind; after the
+  # cut-over PowerShell writers remain (the SKILL fallback, a pre-deploy task session, check
+  # scripts) and a PowerShell `mark` racing a Node `mark` could lose an update. oa-state.ps1 now
+  # takes Node's lock file first, then its mutex. The guard races a real writer of each engine
+  # against the other's REAL lock held across a slow read-modify-write: both updates must land.
+  # Mutants: PowerShell drops the shared lock, either side renames it, the dead-holder reclaim is
+  # removed, -LockWaitSeconds is ignored again.
+  engine-lock:
+    name: The state engines exclude each other
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (a PowerShell and a Node writer racing one task both land)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-engine-lock.ps1
 
   # Only the USER closes a task, and an unanswered message survives a re-snapshot (GH #501).
   #
@@ -370,6 +561,61 @@ jobs:
       - name: Mutation check (his space is read; nothing else latches)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-above-sentinel-reply.ps1
+
+  # A board row with no journal file was invisible to the ENTIRE run (GH #534).
+  #
+  # `oa-state.ps1 scan` is the worklist -- SKILL.md says "run this first, every run" and "work
+  # the rows in the order scan gives you". But the loop is journal-driven: it enumerates
+  # task-*.md and joins board data onto what it finds. A row on the board with no journal yet
+  # produced NO ROW AT ALL, so it could not be ordered, gated, proposed for, or counted.
+  #
+  # Measured live 2026-09-05: Today row 1 (473, added that day) was absent from all 248 scan
+  # rows, with no error and no eligible:false -- the id simply did not appear. Measured again
+  # 2026-09-24 while fixing it: THREE live board rows were invisible, two on Today.
+  #
+  # That is the #346 shape on the primary worklist -- "does not exist" and "exists and I could
+  # not see it" are byte-identical, because both are absence -- and it makes an exhaustion
+  # declaration unsound, since a journal-less Today row cannot hold the Today gate.
+  #
+  # The arms guard BOTH halves: the row must appear, and it must appear HONESTLY. Fabricating
+  # journal facts would be worse than the invisibility, because an invented `reopened` sends a
+  # run to answer a message nobody wrote.
+  board-row-no-journal:
+    name: A board row with no journal is visible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (surfaced, honest, and load-bearing)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-board-row-no-journal.ps1
+
+  # PHASE 3 died naming nothing (GH #613).
+  #
+  # The Telegram mirror failed with "One or more errors occurred." / MIRROR_EXIT=1, and a
+  # second invocation printed NO OUTPUT AT ALL. The cause was the credential-vault read:
+  # `telegram-secret.ps1 get` calls `Add-Type -TypeDefinition`, which JIT-compiles C# and
+  # needs a burst of committed memory, and the box was at its commit limit (20.0 / 20.0 GB).
+  # Ten minutes later the identical call succeeded on attempt 1.
+  #
+  # Three defects, each fatal on its own: it was retryable and not retried; the message was
+  # an unwrapped AggregateException that named no step, no cause and no file (the #346 class,
+  # where a failure is indistinguishable from any other); and the fetch ran before the phase
+  # banner, so the failing run left a reader nothing to anchor on.
+  #
+  # The failure arms matter as much as the recovery arm: a retry that swallowed a genuine,
+  # permanent vault failure would be WORSE than the bug, because the phase would look healthy
+  # while posting nothing. So the suite asserts both directions.
+  #
+  # Hermetic: a stub vault that throws the real exception shape, synthetic settings and a stub
+  # bridge, driving the REAL wrapper with -WhatIf. No Telegram call, no live credential read.
+  mirror-token-retry:
+    name: Mirror survives a transient vault failure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (transient recovers, permanent fails loudly, both name the phase)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-mirror-token-retry.ps1
       - name: Mutation check (#245 -- an agent-declared done must not swallow his messages)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-agent-declared-done.ps1
@@ -666,21 +912,50 @@ jobs:
       - name: Mutation check (reuse, replace, workspace isolation, concurrency)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-per-task-session.ps1
+      - name: Mutation check (dead session process reads replace)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-dead-session-verdict.ps1
+      # GH #562: the binding may only move FORWARD. Measured on task #471, where the chain
+      # b94abe44 -> 42d1a304 -> 9294bd58 was rewritten back onto 42d1a304 with 9294bd58 recorded
+      # as its PRIOR -- a cycle, which orphans the newest session while still charging its
+      # capacity slot and lets each wake flip the binding instead of advancing it. The arms use
+      # #471's own three-session shape, and the mutant arm reproduces that exact recorded state
+      # once the guard is deleted.
+      - name: Mutation check (session replacement cannot go backwards)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-bind-backwards.ps1
+      - name: Mutation check (failed dispatch does not consume concurrency)
+        run: node ./plugins/overnight-agent/checks/mutcheck-direct-dispatch-budget.mjs
+      - name: Removed scheduler tools cannot return anywhere in shipped plugin
+        run: node ./scripts/check-removed-dispatch-tools.mjs
+      - name: Mutation check (busy bound session skips without starving next task)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-busy-bound-session.ps1
+      - name: Mutation check (refill openings until the start cutoff)
+        run: node ./plugins/overnight-agent/checks/mutcheck-direct-dispatch-drain.mjs
 
-  # Retained tasks and old receipt files must not become a cross-run gate (#589).
-  parked-capacity:
-    name: Per-run limit independence
-    runs-on: windows-latest
+  # GH #727: a task session loaded the coordinator skill from its brief. Every brief now starts
+  # with the emitted role_line, and `oa-state.ps1 whoami` lets a bound session see it is a task
+  # session. Synthetic state in a temp dir only.
+  task-session-role:
+    name: Task session role guard
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Saved task state does not change the per-run limit
+      - name: Mutation check (role line in briefs, whoami on bound sessions)
         shell: pwsh
-        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-task-session-role.ps1
 
-  execution-admission:
-    name: Queue drain (${{ matrix.os }})
+  # GH #698, simplified by GH #738: tray browser checks are OFF by default
+  # (including observation), and Observe is the one remaining opt-in -- it is
+  # strictly read-only (which profiles exist, which are in use), since each
+  # Playwright MCP server now launches its own profile and there is nothing
+  # left to launch or thaw on its behalf. The end-to-end case drives the real
+  # browser-watchdog.ps1 with a fixture checker and runs on Windows only.
+  tray-browser-checks:
+    name: Tray browser checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -690,12 +965,47 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Automatic refill, cutoff, completion, reload and native-tool guards
-        run: node --test plugins/overnight-agent/checks/oa-dispatch.test.mjs
-      - name: Behavioral mutations must break the drain guards
-        run: node plugins/overnight-agent/checks/mutcheck-drain.mjs
-      - name: Plugin extension syntax
-        run: node --check plugins/overnight-agent/extensions/task-dispatch/extension.mjs
+      - name: Default-off policy and read-only Observe
+        run: node --test plugins/overnight-agent/checks/consumer-browser-watchdog.test.mjs
+
+  # GH #738: a relaunched profile restores no previous tabs on its own, so a
+  # task saves the URLs it was working on and reopens them next run; and a
+  # second launch of an already-open profile must be recognized and stop the
+  # run rather than retry-looping or falling back to a different profile.
+  # Pure, filesystem-only unit tests, so this runs cross-platform.
+  browser-profile-state:
+    name: Browser profile state (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Task window save/restore and profile-in-use classification
+        run: node --test plugins/overnight-agent/checks/browser-profile-state.test.mjs
+
+  # GH #701: tray plugin update checks are ON by default, daily (hourly selectable),
+  # and report-only unless Auto apply is on. The only source is the Copilot plugin
+  # marketplace CLI (faked here); the workload never runs git or a deploy script.
+  tray-update-checks:
+    name: Tray update checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Marketplace-only, report-only-by-default update checks
+        run: node --test plugins/overnight-agent/checks/consumer-update-check.test.mjs
 
   # A user's pause must still stop dispatch (GH #540), even though task overlap and repeated
   # nudges are now permitted. A per-run allowance is not permission to ignore a pause.
@@ -722,6 +1032,30 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-pause.ps1
 
+  # Item 0c: the end-to-end sandbox harness (plugins/overnight-agent/tests/e2e). The real run
+  # invokes a model and is run by hand (baseline vs candidate, see its README); CI runs the two
+  # parts that need no model. The tripwire check proves sandbox mode is inert when unset and that
+  # every tripwire is load-bearing. The seed-only run seeds every scenario through the CURRENT
+  # oa-state.ps1 and prechecks that each seed still means what its scenario claims, so a change to
+  # the state engine that silently invalidates a scenario fails here rather than at run time.
+  e2e-sandbox:
+    name: E2E sandbox (tripwires + scenario seeds)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (sandbox mode is inert unless set; tripwires are load-bearing)
+        shell: pwsh
+        run: ./plugins/overnight-agent/tests/e2e/mutcheck-sandbox-mode.ps1
+      - name: Invariant i3 excuses only PHASE 0 hygiene path denials (#804)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/e2e/lib/denial-policy.test.mjs ./plugins/overnight-agent/tests/e2e/lib/analyze-events.test.mjs ./plugins/overnight-agent/tests/e2e/lib/test-path-leak.test.mjs
+      - name: Seed every scenario and precheck it against the code under test
+        shell: pwsh
+        run: ./plugins/overnight-agent/tests/e2e/run-sandbox.ps1 -SeedOnly -NoWait -Label ci
+
   # Pacing: how the historical `Overnight Agent concurrency` tunable (#391) is READ. The per-run
   # dispatch job guards enforcement; this one guards the parse
   # boundary, the argument-over-file precedence, and whether a fallback is visible.
@@ -736,11 +1070,11 @@ jobs:
   # Pure text work against synthetic settings files in a temp dir, driven through -UserSettings
   # and an isolated -StateDir. It never reads the real planner folder and never writes state.
   pacing-concurrency:
-    name: Pacing concurrency tunable
+    name: Direct-dispatch concurrency cap
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Mutation check (prose never widens, argument outranks the file, fallbacks are visible)
+      - name: Mutation check (malformed settings never widen the per-run send limit)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-pacing-concurrency.ps1 -Matrix
 
@@ -755,6 +1089,22 @@ jobs:
       - name: Mutation check (safe verdicts, bounded runtime, O(1) history)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-auto-deploy.ps1
+
+  # The Telegram bridge now runs from its own verified package copy in the OA home. The
+  # development checkout is not a deploy target, so dirt or staleness there must not affect
+  # the deployment verdict. This structural guard also forces a genuine deployed-target
+  # failure and checks that it still reaches the loud failure path.
+  deploy-verdict:
+    name: Deploy verdict names which fact fired
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (benign stays quiet, the real alarm is unchanged)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-deploy-verdict.ps1
 
   # A deploy refusal that asserts the OPPOSITE of the truth (GH #575).
   #
@@ -849,6 +1199,311 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  plan-dispatch:
+    name: Reversible plan dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (old proposals re-evaluated, gated steps still wait)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-plan-dispatch.ps1
+
+  # THE SAFETY FLOOR ITSELF, AND IT HAS NEVER RUN IN CI (GH #302).
+  #
+  # `mutcheck-agent-gate.ps1` is the suite that proves the floor outranks the allow list and
+  # outranks a human `approve` in the journal -- the single most consequential ordering in this
+  # repo, since reversing it converts the safety floor into a suggestion. It shipped with #297
+  # and was registered nowhere, so it only ever ran when someone remembered to. That is the same
+  # "shipped as a guard, runs nowhere" shape the ps1-encoding and shipped-but-open jobs above
+  # were added to end.
+  #
+  # It also now covers #302's consumer half. `consent` answers "am I authorised?", never
+  # "should I?", and those come apart in one bad place: an agent reading `gate-allowed` and
+  # merging over a FRESH human "don't" is technically authorised and obviously wrong. The data
+  # to notice that (`trailing_has_user`) shipped with #300; acting on it was two sentences of
+  # SKILL.md prose. A gate allowance with unread human text below the newest turn is now its own
+  # verdict, `gate-allowed-human-spoke`, reporting `consent_ok: false` -- so a caller that never
+  # learns the new reason still stops. The floor is untouched: this only narrows an allow.
+  #
+  # Hermetic: synthetic gates and journals under TEMP driving the REAL oa-state.ps1. It is slow
+  # (12 arms plus 12 mutations, each a full process launch per query), which is the other reason
+  # it needs to be here rather than relying on a developer to run it.
+  agent-gate:
+    name: The safety floor outranks everything, and an allow yields to a fresh reply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (floor precedence, repo scope, and the #302 consumer half)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-agent-gate.ps1
+
+  # A READER THAT CANNOT PARSE WHAT POWERSHELL WROTE (GH #681).
+  #
+  # `oa-state.ps1` writes the per-task state store from PowerShell, which emits UTF-8 WITH a BOM,
+  # and `JSON.parse` rejects a leading BOM. Measured on the live store 2026-09-25: 279 of 281
+  # task files carry it, and all 281 parse cleanly once stripped. So a Node reader that forgets
+  # the strip does not fail on one odd file -- it fails on essentially every file.
+  #
+  # AND THE FAILURE IS SILENT, which is why this is a guard. The idiom throughout `checks/` is a
+  # per-file `try { ... } catch { continue }`, correctly, so that one unreadable file cannot take
+  # down a sweep. Combined with a BOM the reader cannot parse, the sweep completes, reports a
+  # confident `0`, and has examined nothing -- #520/#632's class, where a check that COULD NOT
+  # LOOK reads identically to one that looked and found nothing.
+  #
+  # Not hypothetical: the measurement script written for #433 hit this and reported "doc-bound
+  # tasks: 0 in state" against a store holding 106 live bindings. It was caught only because 0
+  # was implausible enough to check by hand, which is not a control.
+  #
+  # A RATCHET, NOT A BACKLOG. All 36 live-store readers already strip it correctly today, in at
+  # least five different spellings. The convention is held by hand with nothing enforcing it, so
+  # the risk being removed is entirely about the next reader. A shared-helper migration across 36
+  # working files would be a large diff for the same outcome.
+  #
+  # The sweep also applies its own rule to itself: matching no readers exits 2 rather than
+  # printing `clean` over an empty set.
+  state-bom:
+    name: A state-store reader can parse the store
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Sweep (every live-store reader strips the BOM)
+        run: node ./plugins/overnight-agent/checks/state-bom-sweep.mjs
+      - name: Mutation check (a deliberately blind reader is caught)
+        run: node ./plugins/overnight-agent/checks/mutcheck-state-bom.mjs
+
+  # AN ASK THAT INSTRUCTS A GATE EDIT WHICH CANNOT WORK (GH #513).
+  #
+  # #491 one level up. That guard catches a turn advertising a REPLY WORD the consent reader
+  # rejects; this catches a turn advertising a GATE EDIT the consent reader ignores. Same shape
+  # -- Shiv does exactly what was asked and nothing changes -- but it fails on the
+  # safety-critical side.
+  #
+  # The floor stage in `Get-GateVerdict` runs first with `Scoped = $false`, deliberately: repo
+  # scope NARROWS a rule, and narrowing a prohibition removes protection. It also matches on the
+  # action KIND, so a floor rule naming an outcome blocks every action of that kind and no allow
+  # rule can carve an exception out of it. An ask saying "add this allow line and I'll proceed"
+  # on a floor-blocked action is therefore a promise the gate cannot keep.
+  #
+  # It has already cost a cycle. Task #463's ask named an exact line; measured against the real
+  # reader that line leaves the verdict `gate-floor-blocks`, and the only edit that flips it
+  # REMOVES the data-loss floor rule -- not "add one narrow permission" but "drop your only
+  # blanket protection against permanent data loss". Shiv had already replied `Done` once.
+  #
+  # THE MECHANISM ARMS DRIVE THE REAL `oa-state.ps1 consent` through `-GatePath`, so the claim
+  # "the requested edit cannot work" is measured here rather than quoted. They include the
+  # issue's row D: with the floor gone, the requested line contributes NOTHING -- same verdict,
+  # same deciding rule, which was the pre-existing YOLO grant. That is the case the issue's own
+  # first proposed check passed and should not have, so the guard must attribute a verdict change
+  # to the requested edit rather than merely observe that one happened.
+  #
+  # Most other arms prove the guard stays QUIET: an ordinary turn, a turn discussing the gate
+  # without instructing an edit, a turn that shows it ran the check, and a fenced example. A
+  # guard that fires on discussing the gate gets disabled, and then guards nothing.
+  #
+  # Hermetic: synthetic journals, gates, state dir and bodies under TEMP driving the REAL
+  # write-turn.ps1 and oa-state.ps1. No live store, no network, under pwsh on Linux.
+  gate-edit-ask:
+    name: A gate edit is not asked for until it is known to work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (an unverified gate-edit ask is refused; discussion is not)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gate-edit-ask.ps1
+
+  # A SETTING SILENTLY ON ITS BUILT-IN DEFAULT (GH #579).
+  #
+  # oa-state.ps1's own .SETTINGS block promised that "`scan` reports the resolved values per
+  # Today row (`gate_backstop_hours`, `gate_strict`), so a configured value that is not applying
+  # is visible". It reported the VALUE and not its SOURCE, which does not deliver that: a row
+  # reading `gate_backstop_hours: 6` means either "you configured 6" or "nothing is configured
+  # and 6 is the built-in", and separating those two is the whole point of the sentence.
+  #
+  # Measured live 2026-09-25: `Today gate backstop`, `Today gate strict` and `Overnight Agent
+  # concurrency` are ALL absent from user-settings.md. Three user-owned controls running on
+  # built-in defaults, and only concurrency said so -- through `concurrency_source`, precisely
+  # the field the gate settings lacked. Same shape as #593 one job above: a value published
+  # without the provenance needed to interpret it.
+  #
+  # Two arms cover a defect found while writing this rather than the reported one: `off` was
+  # read only through the on-spellings, so a user who deliberately turned strict OFF resolved
+  # through the default path and was reported identically to one who had never heard of the
+  # setting. A typo fell through the same way. Both report now, and a malformed value still
+  # leaves the SAFE default in force -- a typo may narrow the gate, never disable it.
+  #
+  # Hermetic: synthetic journal, state, board, snooze store and settings file under TEMP driving
+  # the REAL oa-state.ps1 via -UserSettings. No live store and no network, under pwsh on Linux.
+  gate-settings-source:
+    name: A gate value is published with where it came from
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (unset, configured, malformed and argument are distinguishable)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gate-settings-source.ps1
+
+  # A COUNT PUBLISHED WITHOUT THE READ BEHIND IT (GH #593).
+  #
+  # `scan` carried `doc_new_comments` but not the freshness of the observation that produced it,
+  # so on the one worklist a run actually reads, three different realities were byte-identical:
+  # observed 30 seconds ago and genuinely empty; last observed 5 days ago with comments since;
+  # and never observed in the task's life. All three printed `doc_new_comments: 0`.
+  #
+  # This matters most exactly where nobody looks. A parked task -- `proposed`, `blocked`,
+  # waiting on Shiv -- is simultaneously the task MOST likely to receive a comment from him,
+  # because it is the one waiting on his word, and the LEAST likely to be selected and
+  # therefore polled. Measured when the issue was filed, all 76 bound channels were fresh and
+  # the defect was latent; measured on the day this shipped, 44 of 106 were stale.
+  #
+  # The guard is the one the issue itself specifies: a never-observed and a freshly-observed
+  # EMPTY channel must produce DIFFERENT scan rows, and the arm to kill is the one that
+  # collapses them back to a bare `0`. `unread` and `stale` are pinned apart too -- a channel
+  # never read has no evidence, one read four hours ago has evidence that expired, and merging
+  # them is how "never observed" hid inside a measured-looking number.
+  #
+  # Hermetic: synthetic journals, state, board and snooze store under TEMP driving the REAL
+  # oa-state.ps1. `scan` is offline by design, so no arm here touches Google or the network.
+  doc-channel-provenance:
+    name: A count is published with the read that produced it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (never-observed and observed-empty are distinguishable)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1
+      # #808: the runner is UTC, so a freshness bug that shifts by the host's UTC offset passed here
+      # while failing on the live host in Seattle. The same arms, outside UTC -- west and east of it
+      # (a half-hour offset too) -- and against the Node engine the agent runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check outside UTC (America/Los_Angeles, oa-state.ps1)
+        shell: pwsh
+        env:
+          TZ: America/Los_Angeles
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1
+      - name: Mutation check outside UTC (Asia/Kolkata, oa-state.ps1)
+        shell: pwsh
+        env:
+          TZ: Asia/Kolkata
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1
+      - name: Mutation check outside UTC (America/Los_Angeles, oa-state.mjs)
+        shell: pwsh
+        env:
+          TZ: America/Los_Angeles
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/oa-state.mjs
+
+  # A PAUSE BINDS SELECTION BUT NOT WORK (GH #627).
+  #
+  # Dispatch already refuses to wake a task the user paused. Nothing re-checked that for a
+  # session that was ALREADY alive, so a session woken before the pause landed kept appending
+  # turns to work he had explicitly stopped. Measured on the live board over one 6h window:
+  # `admits` was 0 for the entire window -- the run was permitted to dispatch nothing -- and
+  # three journals gained turns anyway, two of them on rows `scan` marks ineligible.
+  #
+  # G17 IS THE PAUSE SLICE ONLY, and the arms exist mostly to hold it there. Measured across
+  # 270 live rows: eligible 2, awaiting_reply 182, done 137, off-board 123, user-paused 1.
+  # Applying dispatch's own eligibility test to writing would refuse 268 of 270 turns, and
+  # `done` has a legitimate case -- the turn that REPORTS a task finished is written to a row
+  # that was just marked done. The pause is the one unambiguous condition, because it is his
+  # instruction rather than a scheduling state.
+  #
+  # THE RESUME ARM IS THE LOAD-BEARING ONE. oa-state treats a human message below the newest
+  # turn as the resume, before any `mark` clears `paused_at`. A guard keyed on the stored field
+  # alone would latch and refuse the very turn that answers him -- #569's defect pointed at his
+  # own resume. Verified by mutation: deleting the resume check fails exactly that arm.
+  #
+  # Hermetic: synthetic journal and state under TEMP driving the REAL write-turn.ps1 via
+  # WRITE_TURN_OA_HOME and -JournalDir, under pwsh on Linux. No live store, no network.
+  user-pause-write:
+    name: A paused task refuses the turn, a resumed one does not
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (the pause binds work, not just selection)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-user-pause-write.ps1
+      # A SNOOZED TASK REFUSES EVERY AGENT WRITE (GH #816).
+      #
+      # `scan` already marks snoozed rows ineligible, but an already-awake session can still try
+      # to append a plan or execution turn. G22 makes the sanctioned writer fail closed on
+      # active snoozes, malformed snooze.json, and attempts to disable the guard.
+      - name: Mutation check (snoozed tasks refuse write-turn, PowerShell)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-snooze-write.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/write-turn.ps1
+      - name: Mutation check (snoozed tasks refuse write-turn, Node)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-snooze-write.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/write-turn.mjs
+      # A TASK THE USER CLOSED REFUSES EVERY AGENT WRITE (GH #825).
+      #
+      # `scan` reports a reply on a user-closed task as `reopened_closed` and never offers it,
+      # but e2e scenario e1 caught a turn written there anyway. G24 refuses it in the writer,
+      # with no reply exemption, fails closed on unreadable inputs, and is checked for drift
+      # against oa-state's own Test-UserClosed. Needs Node for the engine cross-check.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Mutation check (user-closed tasks refuse write-turn, PowerShell)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-closed-task-write.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/write-turn.ps1
+      - name: Mutation check (user-closed tasks refuse write-turn, Node)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-closed-task-write.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/write-turn.mjs
+
+  # THE COORDINATOR DISPATCHES APPROVED WORK; IT DOES NOT DO IT (#804).
+  #
+  # A human approval in a journal authorizes the bound task session's outcome turn, not a shortcut
+  # where the coordinator writes the result or marks the work done itself. The check drives both
+  # sanctioned surfaces: write-turn G23 and oa-state mark. Most quiet arms are as important as the
+  # refusal: coordinator bookkeeping without pending approval, -Status approved, -StatusBy user, and
+  # status-less mark calls remain legal.
+  #
+  # Hermetic: synthetic planner/state under TEMP driving the real PowerShell tools. No live store,
+  # no network. The Node-port job below runs the same script against write-turn.mjs/oa-state.mjs.
+  coordinator-no-task-work:
+    name: Coordinator cannot do approved task work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (approved work belongs to the task session)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-coordinator-no-task-work.ps1
+
+  # A TURN CAN ADVERTISE A REPLY WORD ITS OWN READER REJECTS (GH #491).
+  #
+  # `oa-state.ps1` decides whether Shiv approved by matching his reply against one fixed
+  # vocabulary. `write-turn.ps1` writes the sentence that TELLS him which word to send. Nothing
+  # connected the two, so a turn could close with `reply **prune** to proceed` -- a perfectly
+  # clear instruction, and an answer the reader discards. He replies, the reply is read as
+  # nothing, and the task sits blocked on an approval he already gave. That is the same shape as
+  # #227: consent must never be inferred from an absence, and an unreadable answer is an absence.
+  #
+  # The existing vocabulary guard pinned SKILL.md -- the documentation -- not the asks actually
+  # sent, which is why this survived it. G16 reads the outgoing ask instead.
+  #
+  # The arms are mostly about NOT firing: an ordinary turn, every accepted word, `merge <N>`,
+  # bold emphasis and a fenced example must all stay quiet, because a guard that fires on normal
+  # prose gets disabled and then protects nothing. Two arms pin write-turn's copy of the pattern
+  # character-for-character against oa-state's, so the two drifting apart fails here rather than
+  # in a journal months later.
+  #
+  # Hermetic: synthetic journal/state/board under TEMP driving the REAL write-turn.ps1 and
+  # oa-state.ps1, no live store and no network, under pwsh on Linux.
+  advertised-reply-word:
+    name: Advertised reply word is one the reader accepts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (unanswerable asks refuse; ordinary turns stay quiet)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-advertised-reply-word.ps1
+
   # THE ONE CHANGE IN THIS REPO THAT MAKES A GATE WIDER (GH #442).
   #
   # Everything else here refuses more than it used to. This lets a comment on the catch-up doc
@@ -878,6 +1533,12 @@ jobs:
       - name: Mutation check (grants only when asked; floor and invariant still bite)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-consent.ps1
+      # Where he can approve (#124 item 4 step 5): a doc comment whose id is in write-turn's
+      # sent-messages ledger is the agent's, and agent-gate.md's ## Approvals section can switch a
+      # channel off (an unenforceable rule is off too); the gated-dispatch floor obeys the same.
+      - name: Mutation check (sent-messages ledger and per-channel approval rules)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-consent-channels.ps1
 
   # A BOM-less .ps1 containing non-ASCII is decoded as Windows-1252 by the PowerShell 5.1
   # engine BEFORE the script runs, so the bytes the parser sees are not the bytes on disk.
@@ -1058,6 +1719,12 @@ jobs:
           # updates, which had it reporting a permanently-red wrong number until 2026-09-04.
           OA_PLUGIN_REF: HEAD
         run: node ./plugins/overnight-agent/checks/version-bump-sweep.mjs
+      # GH #707: the catalog entry sat at 1.1.0 while plugin.json passed 1.55.0, so the
+      # tray update check could never see a newer version. Bumping one means bumping both.
+      - name: Marketplace catalog version test (drift is caught)
+        run: node --test plugins/overnight-agent/checks/marketplace-version-sync.test.mjs
+      - name: marketplace.json overnight-agent version equals plugin.json
+        run: node ./plugins/overnight-agent/checks/marketplace-version-sync.mjs
   # The supervisor could report HEALTHY while the machine was unusable (GH #403).
   #
   # Every state its classifier could reach was derived from the overnight-agent run slot, so
@@ -1151,6 +1818,203 @@ jobs:
         run: node ./plugins/overnight-agent/checks/mutcheck-shipped-but-open.mjs
       - name: Mutation check (the preflight's exit-code contract, incl. 2 != 0)
         run: node ./plugins/overnight-agent/checks/mutcheck-issue-shipped.mjs
+      - name: Mutation check (a [gated] step is never dispatched without HIS consent, #804)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gated-dispatch.ps1
+      - name: Mutation check (lanes -- scan and session enforce them in code, and off is off; item 6)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-lanes.ps1
       - name: Mutation check (G15 refuses proposals, never reports, and fails open loudly)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-shipped-pick.ps1
+  # Item 0b: the Overnight Agent CHARACTERIZATION (golden) suite. It pins what oa-state.ps1 and
+  # write-turn.ps1 observably do today -- every subcommand and every write-turn mode, plus at
+  # least one case per behaviour each oa-state/write-turn mutation check protects -- as
+  # implementation-agnostic goldens (exit code, normalised stdout/stderr, and the file-tree diff
+  # of a sandboxed planner folder + state dir). It is the gate for the Node ports (items 3 and 4):
+  # the same cases run against `--impl node` must produce the same observations.
+  #
+  # windows-latest because the owner's agent runs on Windows and a few verdicts are OS-shaped
+  # (the state-lock path is case-folded on Windows, path roots, Test-Path). Hermetic: every path
+  # argument points into a temp sandbox and the child environment is an allow-list, so no live
+  # store, no network, and no ambient session id. See plugins/overnight-agent/tests/characterization/README.md.
+  agent-characterization:
+    name: Agent characterization (golden) suite
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The goldens were recorded in the owner's zone, and PowerShell renders some timestamps in
+      # local time; the runner refuses to compare in any other zone rather than normalise it away.
+      - name: Pin the time zone the goldens were recorded in
+        shell: pwsh
+        run: tzutil /s "Pacific Standard Time"
+      - name: Normaliser (minute stamps cannot straddle a bucket edge)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/characterization/lib/normalize.test.mjs
+      - name: Characterization suite against the PowerShell implementation
+        shell: pwsh
+        run: node ./plugins/overnight-agent/tests/characterization/run.mjs --impl ps --jobs 4
+  # Item 4: oa-state.mjs, the Node port of the state engine (collect -> plan -> act -> report),
+  # not yet called by anything. Same bar as write-turn-node: every oa-state characterization
+  # golden recorded from oa-state.ps1 must pass against the port with ZERO skips; differential
+  # runs then feed random inputs through BOTH implementations -- function by function through
+  # ps-fn-host.ps1 (journal, board, session readers) and whole commands in twin sandboxes
+  # (scan, consent, extract, session, mark/seed/resnapshot/doc sequences) -- comparing every
+  # output and file effect. windows-latest and the pinned zone, as the goldens require.
+  oa-state-node:
+    name: oa-state Node port (goldens, differential)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pin the time zone the goldens were recorded in
+        shell: pwsh
+        run: tzutil /s "Pacific Standard Time"
+      - name: Characterization goldens, every oa-state case, against the Node port (no SKIP)
+        shell: pwsh
+        run: |
+          node ./plugins/overnight-agent/tests/characterization/run.mjs --impl node --tool oa-state --jobs 4 | Tee-Object -Variable out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (($out -join "`n") -match 'skip 0')) { Write-Error 'the Node port left oa-state cases unmapped (SKIP)'; exit 1 }
+      - name: Differential -- readers, function by function (PowerShell vs Node)
+        shell: pwsh
+        run: |
+          $d = './plugins/overnight-agent/tests/oa-state-port'
+          node "$d/journal-diff.mjs" --n 300; if ($LASTEXITCODE) { exit 1 }
+          node "$d/board-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
+          node "$d/session-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
+          node "$d/round-diff.mjs" --n 4000; if ($LASTEXITCODE) { exit 1 }
+      - name: Differential -- whole commands, twin sandboxes (PowerShell vs Node)
+        shell: pwsh
+        run: |
+          $d = './plugins/overnight-agent/tests/oa-state-port'
+          node "$d/consent-diff.mjs" --n 200 --jobs 4; if ($LASTEXITCODE) { exit 1 }
+          node "$d/extract-diff.mjs" --n 200 --jobs 4; if ($LASTEXITCODE) { exit 1 }
+          node "$d/scan-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
+          node "$d/session-cmd-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
+          node "$d/mutate-diff.mjs" --n 60 --steps 6 --jobs 1; if ($LASTEXITCODE) { exit 1 }
+          # #815: his real approval paths (app composer, task-paper comment, Telegram fold -- the REAL
+          # writers) still grant under the default ## Approvals channels, on both engines.
+          node "$d/approval-paths.mjs"; if ($LASTEXITCODE) { exit 1 }
+  # Every mutation check that drives the state engine, against the Node port: same arms, and a
+  # JS twin for every PowerShell mutant (tests/oa-state-port/run-mutchecks.ps1 holds the list).
+  # The PowerShell runs stay where they already are, in the jobs above.
+  oa-state-node-mutchecks:
+    name: oa-state Node port (mutation checks)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation checks against the Node port
+        shell: pwsh
+        run: ./plugins/overnight-agent/tests/oa-state-port/run-mutchecks.ps1 -Target node  # Item 3: write-turn.mjs, the Node port of the sanctioned journal writer. It is not called by
+  # anything yet; this job is what earns it the right to be. The contract is the characterization
+  # goldens recorded from write-turn.ps1, so the port must pass every write-turn case with ZERO
+  # skips. Two differential runs then aim at what no golden thought of: every pattern the guards
+  # use, translated from .NET regex semantics, compared match-for-match against .NET itself; and
+  # random turns x random destinations x random flags run through BOTH implementations in twin
+  # sandboxes, comparing exit code, output and every file effect. Finally every mutation check
+  # that drives write-turn runs against the port as well -- and the three that ran nowhere in CI
+  # (mutcheck-write-turn, -sentinel, turn-ask; the first had rotted when G19 landed) now run
+  # against the PowerShell too. windows-latest: those three drive Windows PowerShell, as
+  # production does, and the goldens are Windows-recorded.
+  write-turn-node:
+    name: write-turn Node port (goldens, differential, mutation checks)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pin the time zone the goldens were recorded in
+        shell: pwsh
+        run: tzutil /s "Pacific Standard Time"
+      - name: Characterization goldens, every write-turn case, against the Node port (no SKIP)
+        shell: pwsh
+        run: |
+          node ./plugins/overnight-agent/tests/characterization/run.mjs --impl node --tool write-turn --jobs 4 | Tee-Object -Variable out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (($out -join "`n") -match 'skip 0')) { Write-Error 'the Node port left write-turn cases unmapped (SKIP)'; exit 1 }
+      - name: Sent-messages ledger and protected-target guard (node --test)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/write-turn-port/ledger.test.mjs ./plugins/overnight-agent/tests/write-turn-port/g20-unreadable-target.test.mjs
+      - name: Per-device agent metadata publisher (node --test; item 5, docs/spec/Domain-agent-metadata.md)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/agent-metadata/publish.test.mjs
+      - name: Lanes contract vectors and G20 protects agent-lanes.json, both engines (node --test; item 6, docs/spec/Domain-lanes.md)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/lanes/lanes.test.mjs ./plugins/overnight-agent/tests/write-turn-port/g20-lanes.test.mjs
+      - name: Mutation check -- every publisher rule is load-bearing
+        shell: pwsh
+        run: node ./plugins/overnight-agent/checks/mutcheck-agent-metadata.mjs
+      - name: Differential -- regex translation vs .NET
+        shell: pwsh
+        run: node ./plugins/overnight-agent/tests/write-turn-port/regex-diff.mjs --n 400
+      - name: Differential -- whole tool, PowerShell vs Node, twin sandboxes
+        shell: pwsh
+        run: node ./plugins/overnight-agent/tests/write-turn-port/body-diff.mjs --n 80 --jobs 4
+      - name: Mutation checks against BOTH implementations
+        shell: pwsh
+        run: |
+          $skill = './plugins/overnight-agent/skills/overnight-agent'
+          $wt = "$skill/write-turn.mjs"
+          $failed = @()
+          $runs = @(
+            @{ f = "$skill/mutcheck-write-turn.ps1";            node = @('-Target', $wt);        ps = @() },
+            @{ f = "$skill/mutcheck-write-turn-sentinel.ps1";   node = @('-Target', $wt);        ps = @() },
+            @{ f = './plugins/overnight-agent/checks/mutcheck-turn-ask.ps1'; node = @('-Target', $wt); ps = @() },
+            @{ f = "$skill/mutcheck-pointer-turn.ps1";          node = @('-Target', $wt);        ps = $null },
+            @{ f = "$skill/mutcheck-declared-ask.ps1";          node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-advertised-reply-word.ps1"; node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-gate-edit-ask.ps1";         node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-user-pause-write.ps1";      node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-snooze-write.ps1";          node = @('-ScriptPath', $wt);    ps = $null },
+            @{ f = "$skill/mutcheck-closed-task-write.ps1";     node = @('-ScriptPath', $wt);    ps = $null },
+            @{ f = "$skill/mutcheck-coordinator-no-task-work.ps1"; node = @('-ScriptPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-shipped-pick.ps1";          node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-plan-dispatch.ps1";         node = @('-TurnScript', $wt);    ps = $null }
+          )
+          # ps = $null: the PowerShell run already has its own job elsewhere in this workflow.
+          foreach ($r in $runs) {
+            foreach ($target in @('node', 'ps')) {
+              $extra = $r[$target]
+              if ($null -eq $extra) { continue }
+              Write-Host "::group::$($r.f) [$target]"
+              & pwsh -NoProfile -File $r.f @extra
+              $code = $LASTEXITCODE
+              Write-Host '::endgroup::'
+              if ($code -ne 0) { $failed += "$($r.f) [$target] exit $code" }
+            }
+          }
+          if ($failed.Count) { $failed | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
+
+  # sync-oa-home.ps1 deploys .ps1/.mjs/.js into the flat OA home BY BASENAME and refuses a name
+  # that exists at two paths in the plugin -- so a test fixture that reuses a deployable name
+  # silently freezes the real file in the live home. It happened twice in one day: the
+  # characterization stub issue-shipped.mjs froze checks/issue-shipped.mjs (G15's classifier), and
+  # a second shadow.mjs. The sweep existed; nothing gated on it. Now something does.
+  basename-collision:
+    name: No deployable basename at two paths
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (the sweep finds what it claims to)
+        run: node ./plugins/overnight-agent/checks/mutcheck-basename-collision.mjs
+      - name: Every deployable basename resolves to one path
+        env:
+          OA_REPO: ${{ github.workspace }}
+        run: node ./plugins/overnight-agent/checks/basename-collision-sweep.mjs

@@ -10,8 +10,8 @@
 //
 // MEASURED LIVE, 2026-09-04 (the reproduction this sweep is built from)
 // ---------------------------------------------------------------------
-//   05:36:53 PT  the run woke the sub-session bound to task #466 (`session -SessionWoken`
-//                recorded it, so `last_woken_at` is a real, durable wake boundary)
+//   05:36:53 PT  the run woke the sub-session bound to task #466 (the then-used
+//                `session -SessionWoken` call recorded a durable `last_woken_at` boundary)
 //   05:44:44 PT  a `copilot.exe` session host spawned to service that wake
 //   ~06:07 PT    that host (PID 5892) was GONE. Elapsed ~22 minutes.
 //   output       NOTHING, anywhere. No branch, no PR, worktree clean, `task-466.md` mtime
@@ -223,7 +223,7 @@ for (const id of activeIds) {
   const sessionId = String(sess.session_id ?? '');
   if (!sessionId) continue; // gate UNBOUND
 
-  // The wake boundary. `last_woken_at` is stamped by `session -SessionWoken`; `created_at` is
+  // The wake boundary. `last_woken_at` is stamped by `session -ForDispatch`; `created_at` is
   // the boundary of the wake a freshly bound session is briefed with (PHASE 1 steps 4-5 bind
   // then brief, so a binding IS a dispatch). The later of the two is the newest wake, which is
   // the only one still answerable.

@@ -1,0 +1,32 @@
+{
+  "fixture": "mc-agent-declared-done",
+  "covers": [
+    "mutcheck-agent-declared-done"
+  ],
+  "cases": [
+    {
+      "id": "mc/agent-declared-done/agent-done-with-absorbed-user-messages",
+      "note": "agent-declared done on Today still reports unanswered_user, is eligible, holds gate, and blocks Deferred",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/agent-declared-done/user-completed-control",
+      "note": "completed-board task remains user_closed/reopened_closed and ineligible (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/agent-declared-done/sibling-turn-control",
+      "note": "sibling-skill turn below agent block is not an unanswered user message (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/agent-declared-done/unmarked-prose-control",
+      "note": "unattributed trailing prose fails closed for standing unanswered_user (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    }
+  ]
+}

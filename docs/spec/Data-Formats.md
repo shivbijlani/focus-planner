@@ -122,6 +122,8 @@ Known gap: issue #556 shows that a reused task id on both boards can make a live
 
 Journals are append-only markdown chat threads. `src/journalChat.js` renders them in the app; `packages/telegram-bridge/src/journal.js` folds Telegram replies back in; the Overnight Agent reads the same bytes. `src/config/agentsDoc.js` is the human-readable contract that the app scaffolds into each folder.
 
+An optional task briefing can live beside the journal as `journal/task-<id>-briefing.md`. This exact filename is reserved for the primary Markdown briefing; it is independent of `journal/task-<id>.md` and any native Docs primary. Other descriptive filenames remain supporting documents and are never inferred as briefings. The app links to a briefing only when that exact file exists in the active storage source; it does not create, rename, or migrate files.
+
 Real sample, combining the fixture in `src/journalChat.test.js` with exact markers from `src/config/agentsDoc.js` and `packages/telegram-bridge/src/journal.js`:
 
 > [!NOTE]
@@ -177,6 +179,7 @@ yes, go ahead
 | Multi-line HTML comments are hidden from the chat. | Machine metadata must travel with the file without rendering as prose. | `src/journalChat.js`; `src/journalChat.test.js` |
 | Fenced code is quoted text, not markup. | A fenced `## 2026-12-25` or `<!-- from: me -->` must not fabricate a new day or fake human approval. | `fencedLineMask()` in `src/journalChat.js`; `src/journalChat.test.js`; PowerShell mirror in `oa-state.ps1` |
 | Appends happen at the bottom only. | Re-scan logic and user-visible history depend on stable earlier content. | `appendJournalMessage()` in `src/journalChat.js`; `packages/telegram-bridge/src/journal.js` |
+| An agent turn written by `write-turn.mjs` carries `<!-- oa-ask: blocking\|offer\|none -->` and `<!-- oa-by: session=<id> host=<host> -->` directly under its `<!-- from: overnight-agent -->` marker. | The ask is declared, not guessed from prose; the identity records which session on which machine wrote the turn. Both are complete inline comments, so they render as nothing, and neither contains `AUTO` or `AGENT` as a word. | `plugins/overnight-agent/skills/overnight-agent/write-turn.mjs` (G13, G21); `oa-state.ps1` reads `oa-ask` |
 | Checkbox items and `TODO:` / `DONE:` prefixes are first-class task markers. | The UI and `server.js` extract todos from those exact shapes. | `server.js`, `src/config/agentsDoc.js` |
 
 </details>
@@ -185,7 +188,35 @@ The design rationale is explicit in comments and tests: plain markdown always de
 
 Known gap: issue #569 reports that one Overnight Agent reopen reader still misses user text edited **above** the sentinel. The journal format itself is stable; one consumer still under-reads it.
 
-## 3. Agent permissions, settings, and per-task state
+## 3. Native catch-up Docs
+
+Docs is an optional, markdown-backed catch-up surface for long task journals. It is enabled only
+when `docs/index.json` exists; without that file, a user sees no Docs UI or changed agent behavior.
+Each task has at most one primary catch-up document, and that document can link to supporting docs.
+The app writes user comments, the publisher writes documents and responses, and the publisher
+maintains the task-to-primary registry. This one-writer-per-file split keeps simultaneous user
+comments mergeable without allowing an agent and the app to overwrite each other's work.
+
+The full behavior contract, lifecycle, publisher interface, validation errors, threshold,
+review-set traversal, and normative test vectors are in
+[Domain-docs](Domain-docs).
+
+| Format | Location and writer | Purpose |
+| --- | --- | --- |
+| `index.json` | `docs/index.json`; `fp-docs` publisher | Library listing, document metadata, links, task-to-primary binding, and badge counts. |
+| `doc.md` | `docs/<doc-id>/doc.md`; `fp-docs` publisher | Renderer-compatible Markdown body, publisher revision stamp, and stable `@bN` block anchors. |
+| `review.json` | `docs/<doc-id>/review.json`; Docs app | Submitted span comments, review batches, per-comment logical clocks, and read revision. |
+| `response.json` | `docs/<doc-id>/response.json`; `fp-docs` publisher | Revision summaries, per-comment dispositions, and acknowledged review id. |
+| `history/rNNNN.md` | `docs/<doc-id>/history/`; `fp-docs` publisher | Immutable snapshots of the latest 20 published revisions. |
+
+The JSON contracts are machine-readable in [`schemas/docs-index.schema.json`](schemas/docs-index.schema.json),
+[`schemas/docs-review.schema.json`](schemas/docs-review.schema.json), and
+[`schemas/docs-response.schema.json`](schemas/docs-response.schema.json). `doc.md` uses the
+existing journal Markdown subset; it is not a JSON format. The threshold is 1,500 visible journal
+words by default, after hidden HTML comments and marker metadata are stripped. The Docs app and
+agent use the same measure.
+
+## 4. Agent permissions, settings, and per-task state
 
 ### `agent-gate.md`
 
@@ -241,6 +272,36 @@ directly — both are the same file.
 
 The comments tie the design directly to consent: this file exists because a journal marker such as `<!-- from: me -->` is still written by software, so standing permissions need a human-authored surface instead.
 
+#### `## Approvals` — where the user can approve
+
+An optional section of the same file names, per channel, the rule a reply must meet to count as the user's approval. The defaults apply when the section, or a channel's line, is absent. A channel set to `off` (or `never`, `disabled`, `none`, `no`) never approves. So does a channel given any other rule, because a rule the reader cannot enforce must not fall back to a weaker one. The agent reads the section and never writes it. The app editor preserves it, since it is not one of the two managed lists.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+```markdown
+## Approvals
+- app: editor
+- telegram: sender-id
+- teams: no-signature + not-in-sent-ledger
+- mail: no-signature + not-in-sent-ledger
+- google-doc: no-signature + not-in-sent-ledger
+```
+
+| Channel | Default rule | Read by the consumer engine |
+| --- | --- | --- |
+| `app` | `editor`: the journal, written through the app's editor (`<!-- from: me -->`) | yes: `consent` and the gated-dispatch floor |
+| `google-doc` | `no-signature + not-in-sent-ledger`: a catch-up-doc comment with no agent signature whose id is not in the sent-messages ledger | yes: `consent -DocComments` |
+| `telegram` | `sender-id`: enforced by the bridge, which folds only the user's chat into the journal | via the journal |
+| `teams`, `mail` | `no-signature + not-in-sent-ledger` | no reader, so they never approve here |
+
+Refusals name the channel: `approvals-channel-off:<channel>`, `approvals-channel-unrecognised:<channel>`, or `approvals-channel-unreadable:<channel>` (the file exists but cannot be read). Pinned by `mutcheck-consent-channels.ps1` and the `mc-consent-channels` goldens.
+
+</details>
+
 ### `user-settings.md`
 
 This markdown file is the live configuration source the app edits and the Overnight Agent reads at run time. The bundled plugin copy is only a template.
@@ -279,7 +340,7 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 
 | Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
 | --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | MCP Edge 1 (CDP 9225) |
+| `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | `Browser - <account label>` |
 ```
 
 
@@ -296,8 +357,8 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 | Non-table prose, blockquotes, comments, and preference bullets are preserved byte-for-byte. | This is the agent’s source of truth; the app must not erase surrounding guidance. | `serializeSettingsForm()` in `src/config/userSettingsForm.js` |
 | `Today gate backstop` accepts `6`, `6h`, `6 hours`, or `off`. | The gate reader wants a human-friendly but bounded grammar. | `Resolve-GateSettings` in `oa-state.ps1` |
 | `Today gate strict` is truthy only for `on`, `yes`, or `true`. | Fail-safe default is non-strict unless the file explicitly enables strict gating. | `Resolve-GateSettings` in `oa-state.ps1` |
-| `Overnight Agent concurrency` must be a **bare whole number**. It is run-local drain width, refilled on completion. | Anchored parsing prevents dated prose like `2026-09-02: set to 1` from becoming a width of `2026`. | `Resolve-PacingSettings` in `oa-state.ps1` |
-| `Overnight Agent start buffer` is whole minutes `0..29`, optionally suffixed `m`; default `5m` when absent. | New-start cutoff is next half-hour minus this buffer. Invalid/unreadable configuration refuses a new drain; reload retains the enrolled buffer. | `Get-StartBufferSettings` in `oa-state.ps1`, `nextCutoff` in `oa-dispatch.mjs` |
+| `Overnight Agent concurrency` must be a **bare whole number**. It caps total send attempts in one run; completion does not refill the limit. | Anchored parsing prevents dated prose like `2026-09-02: set to 1` from becoming a limit of `2026`; invalid values narrow to `1`. | `Resolve-PacingSettings` in `oa-state.ps1` |
+| `Overnight Agent start buffer` is whole minutes `0..29`, optionally suffixed `m`; default `5m` when absent. | The coordinator checks the next local half-hour minus the buffer before each send. Invalid/unreadable existing configuration means do not send. | Coordinator guidance in `plugins/overnight-agent/skills/overnight-agent/SKILL.md` |
 | Browser-slot column order does not matter; Slot/Port/Profile are required. | Scripts resolve columns by name and must fail loudly on ambiguous slot definitions. | `user-settings.md` guidance; CI browser-slot mutation check in `.github/workflows/ci.yml` |
 
 </details>
@@ -351,6 +412,7 @@ Source-faithful sample built from `Cmd-Seed`, `Cmd-Mark`, `New-PollObject`, `New
     "last_woken_at": "2026-09-07T01:30:00+00:00",
     "state": "live",
     "prior_session_id": "old456",
+    "prior_session_ids": ["old123", "old456"],
     "replaced_at": "2026-09-06T18:05:00+00:00"
   },
   "today_exhausted": {
@@ -379,7 +441,122 @@ Source-faithful sample built from `Cmd-Seed`, `Cmd-Mark`, `New-PollObject`, `New
 
 Known gap: issue #571 says `status_by` still lacks enough close provenance to prove the “only the user closes a task” invariant by itself.
 
-## 4. Telegram bridge state — `state.json`
+### Sent-messages ledger — `%LOCALAPPDATA%\overnight-agent\sent-messages.jsonl`
+
+Every message the agent sends outside the planner is recorded here by
+`write-turn.mjs record-sent`, so a reply on a channel where the agent posts as the user (Teams, mail,
+Google Doc comments) can be told apart from one of the agent's own messages: it counts as the
+user's only when it carries no agent signature **and** its id is not in this ledger. The file is in
+the OA home (`WRITE_TURN_OA_HOME`, else `OVERNIGHT_AGENT_HOME`, else `%LOCALAPPDATA%\overnight-agent`),
+never in the planner folder, and only the tool writes it.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+One JSON object per line, appended:
+
+```json
+{"v":1,"at":"2026-10-01T03:00:00-07:00","channel":"teams","message_id":"1727776800123","task_id":"448","by":"3b7bb6f8-2914-44a9-851b-0d6a5a906283","host":"shiv-devbox"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `v` | Format version, `1`. |
+| `at` | When it was sent: ISO-8601 with offset (`-At`, default now). |
+| `channel` | Lower-case channel name: `mail`, `teams`, `google-doc`, `telegram`, `github`, … (`^[a-z][a-z0-9-]{0,31}$`). |
+| `message_id` | The id the channel returned for the sent message, verbatim (one line, ≤ 1024 characters). |
+| `task_id` | The task it was sent for, or `""`. |
+| `by`, `host` | The sending session and machine, in the same form as the journal's `oa-by` stamp. |
+
+Rules: a `(channel, message_id)` pair is recorded at most once (`channel` compared case-insensitively,
+`message_id` exactly); a line that is not such an object is ignored and counted as `malformed`;
+`was-sent -Channel <c> -MessageId <id>` prints `{ ok, sent, entry, ledger, malformed }` and exits 0;
+bad arguments exit 3.
+
+</details>
+
+### Per-device agent metadata — `agent-metadata/<device-key>.json`
+
+One small JSON file per PC that runs the Overnight Agent, in the planner folder, written only by that
+PC through the sanctioned write tool and read by the app to show the 🤖 session link on a board row.
+It carries, per task, the binding-time fingerprint of the row (SHA-256 of the normalised
+`[ID, Added, Task title]`) and the task's live session bindings — never tokens, local paths,
+journal text or agent state. The full contract (envelope, device key derivation, normalisation
+rules, publisher and reader rules, and the test vectors) is [Domain-agent-metadata](Domain-agent-metadata).
+
+> [!NOTE]
+> **Technical detail: envelope at a glance** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+```json
+{
+  "schema": "fp-agent-task-metadata@1",
+  "device": { "key": "<32 hex>", "id": "<random uuid>", "name": "SHIV-DESKTOP" },
+  "planner": { "board": "planner.md" },
+  "revision": 42,
+  "publishedAt": "2026-10-02T21:30:05.120Z",
+  "lastSeenAt": "2026-10-02T21:30:05.120Z",
+  "heartbeatMinutes": 30,
+  "truncated": false,
+  "tasks": { "468": { "fingerprint": "sha256:<64 hex>", "bindings": [
+    { "source": "copilot-app", "sessionId": "<id>", "status": "live", "boundAt": "…", "verifiedAt": "…",
+      "url": "ghapp://sessions/<id>" } ] } }
+}
+```
+
+| Invariant | Why it exists |
+| --- | --- |
+| File name stem = `device.key` = derived from `device.id`. | Conflict copies (`<key> (1).json`) and hand-copied files are ignored without guessing. |
+| A device writes only its own file, atomically. | Two PCs on one synced folder can never conflict. |
+| The fingerprint is captured at binding time and reused until a wake or explicit revalidation. | A title/date edit or a reused task ID hides the link instead of pointing it at the wrong session. |
+| A `url` is the link the host reported, else the Copilot app's `ghapp://sessions/<same id>` for a binding live in the agent's own state; only that form or a safe `https://` URL. | No link to another session, scheme or a released/dead one. |
+| `lastSeenAt` older than max(15 min, 2 × `heartbeatMinutes`) = stale, not removed. | An asleep PC is not a deleted binding. |
+
+</details>
+
+### Agent lanes — `agent-lanes.json`
+
+Present only when the user has set up lanes (two or more PCs running the agent). It says which lanes
+each PC serves, which PCs also take tasks with no lane (catch-all), and which tasks the user has
+assigned to a lane from the app. The app is its only writer; every agent reads it and none can write
+it (it is protected like `agent-gate.md`). When it is absent, lanes are off and every PC behaves as
+it always has. A task can also carry a lane in its board row as a `#lane:<name>` tag, and inherits
+its first parent's lane through `Linked ID`. The full contract — resolution rules, validation, engine
+and app behaviour, and test vectors — is [Domain-lanes](Domain-lanes).
+
+> [!NOTE]
+> **Technical detail: file at a glance.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+```json
+{
+  "schema": "fp-agent-lanes@1",
+  "revision": 3,
+  "updatedAt": "2026-10-03T12:00:00.000Z",
+  "devices": {
+    "86b8ff7cab63af69cc52ff83591b0ffd": { "name": "WORK-LAPTOP", "lanes": ["ado"], "catchAll": false }
+  },
+  "tasks": { "10": "ado" }
+}
+```
+
+| Invariant | Why it exists |
+| --- | --- |
+| Absent file = lanes off everywhere. | A single-PC user never sees or is affected by lanes. |
+| Written only by the app; G20 refuses it as an agent write target. | An agent must not be able to give itself work. |
+| Any invalid part invalidates the whole file, and an invalid file means no PC picks new work. | Dropping one entry would silently widen that PC to catch-all. |
+| Device keys are the per-device metadata keys. | One device identity, not two. |
+
+</details>
+
+## 5. Telegram bridge state — `state.json`
 
 The Telegram bridge keeps operational JSON in a separate state directory, outside the repo and outside OneDrive. Unlike journals and boards, this is **host-local machinery**, not planner content.
 
@@ -441,7 +618,7 @@ Source-faithful sample built from `emptyState()` plus the reducers in `packages/
 
 </details>
 
-## 5. Folder-sync sidecars — `<file>.sync.json`
+## 6. Folder-sync sidecars — `<file>.sync.json`
 
 Folder sync does not treat `planner.md` as one opaque blob. It splits the file into record rows plus a structural `__frame__` record and writes per-record metadata to a neighboring JSON sidecar.
 
@@ -487,7 +664,7 @@ Source-faithful sample from `packages/folder-sync/src/merge.js`, `packages/folde
 
 The comments explain the design plainly: the unit of sync is the **row**, because that is the only way to keep deletes durable and make concurrent edits to different tasks commute.
 
-## 6. MCP credential pointer file — `mcp-secrets.json`
+## 7. MCP credential pointer file — `mcp-secrets.json`
 
 This file never stores secret values. It is a non-secret pointer that tells the local launcher which credential-vault entries and public ids exist.
 

@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/consent-vocab-drift/merge-number-accepted",
+  "steps": [
+    {
+      "args": {
+        "Id": "924"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": "me",
+        "affirmative_phrase": "merge 300",
+        "affirmative_unattributed": false,
+        "consent_ok": true,
+        "human_segments": 1,
+        "id": "924",
+        "path": "<ROOT>/data/journal/task-924.md",
+        "reason": "human-authored-affirmative",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

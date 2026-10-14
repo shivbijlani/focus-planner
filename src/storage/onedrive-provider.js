@@ -85,13 +85,32 @@ export class OneDriveProvider {
     const url = `${APPROOT}:/${path}:/content`
     // `cache: 'no-store'` is required for read-your-writes: Graph's :/content
     // endpoint redirects to a cacheable CDN URL, so a default fetch can serve a
-    // stale body immediately after a write. The Combined view re-reads a source
-    // right after writing to it (link/mark handlers -> applyOp), so a cached read
+    // stale body immediately after a write. The board re-reads its provider
+    // right after writing (link/mark handlers -> applyOp), so a cached read
     // left the board showing stale content until a full page reload (#411).
     const res = await fetch(url, { headers: this._authHeader(), cache: 'no-store', signal })
     if (res.status === 404) return ''
     if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
     return res.text()
+  }
+
+  /**
+   * Read a file together with its eTag, for optimistic-concurrency writes
+   * (`write(path, content, { ifMatch: etag })`). Returns { content: '', etag: null }
+   * for a missing file, so the caller can create it with `ifNoneMatch: '*'`.
+   */
+  async readWithEtag(path) {
+    await this._ensureToken()
+    const res = await fetch(`${APPROOT}:/${path}?$select=eTag,@microsoft.graph.downloadUrl`, {
+      headers: this._authHeader(), cache: 'no-store',
+    })
+    if (res.status === 404) return { content: '', etag: null }
+    if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
+    const meta = await res.json()
+    const url = meta['@microsoft.graph.downloadUrl']
+    const body = url ? await fetch(url, { cache: 'no-store' }) : null
+    if (body && !body.ok) throw new Error(`OneDrive read failed: ${body.status}`)
+    return { content: body ? await body.text() : '', etag: meta.eTag ?? null }
   }
 
   async write(path, content, opts = {}) {
@@ -198,6 +217,24 @@ export class OneDriveProvider {
       }
     } catch { /* ignore */ }
     return ids
+  }
+
+  /** File names directly inside `dir`, or null when the folder does not exist. Throws on 429. */
+  async listDir(dir) {
+    await this._ensureToken()
+    const names = []
+    let next = `${APPROOT}:/${dir}:/children?$select=name,file`
+    let first = true
+    while (next) {
+      const res = await fetch(next, { headers: this._authHeader() })
+      if (first && res.status === 404) return null
+      if (!res.ok) throw Object.assign(new Error(`OneDrive list failed: ${res.status}`), { status: res.status, headers: res.headers })
+      const data = await res.json()
+      for (const item of data.value ?? []) if (item.file) names.push(item.name)
+      next = data['@odata.nextLink'] ?? null
+      first = false
+    }
+    return names
   }
 
   // ── Private helpers ──────────────────────────────────

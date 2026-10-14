@@ -1,0 +1,122 @@
+{
+  "files": {
+    "state/task-960.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "960",
+        "plan_id": "t960-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "11111111-1111-4111-8111-111111111111",
+          "prior_session_ids": [
+            "11111111-1111-4111-8111-111111111111"
+          ],
+          "project": "focus-planner",
+          "replaced_at": "<NOW+0m>",
+          "session_id": "22222222-2222-4222-8222-222222222222",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-960b",
+          "workspace_type": "worktree"
+        },
+        "session_replacements": [
+          {
+            "at": "<NOW+0m>",
+            "session_id": "11111111-1111-4111-8111-111111111111"
+          }
+        ],
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/task-session-role/whoami-replaced-ids",
+  "steps": [
+    {
+      "args": {
+        "Id": "960",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-960",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "960",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "960",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-960b",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "SessionId": "11111111-1111-4111-8111-111111111111"
+      },
+      "command": "whoami",
+      "exit": 0,
+      "json": {
+        "role": "task",
+        "role_line": "You are the task session for planner task #960. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "11111111-1111-4111-8111-111111111111",
+        "session_id_source": "parameter",
+        "task_id": "960",
+        "tasks": [
+          {
+            "id": "960",
+            "match": "prior_session_id",
+            "state": "live"
+          }
+        ]
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "SessionId": "22222222-2222-4222-8222-222222222222"
+      },
+      "command": "whoami",
+      "exit": 0,
+      "json": {
+        "role": "task",
+        "role_line": "You are the task session for planner task #960. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "22222222-2222-4222-8222-222222222222",
+        "session_id_source": "parameter",
+        "task_id": "960",
+        "tasks": [
+          {
+            "id": "960",
+            "match": "session_id",
+            "state": "live"
+          }
+        ]
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "cmd/extract/101-tiny-budget-verify",
+  "steps": [
+    {
+      "args": {
+        "BudgetKB": 1,
+        "Id": "101",
+        "Verify": true
+      },
+      "command": "extract",
+      "exit": 0,
+      "json": {
+        "ceiling_bytes": 4096,
+        "emitted_bytes": 454,
+        "id": "101",
+        "path": "<ROOT>/data/journal/task-101.md",
+        "problems": [],
+        "source_bytes": 488,
+        "verbatim": true,
+        "verify": "pass"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

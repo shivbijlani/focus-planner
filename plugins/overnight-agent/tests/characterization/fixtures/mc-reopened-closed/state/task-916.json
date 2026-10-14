@@ -1,0 +1,14 @@
+{
+  "id": "916",
+  "status": "proposed",
+  "version": 1,
+  "plan_id": "t916-v1",
+  "processed_file_hash": "2784986c8c9858136da4e19c1d8d948e2ef4cd7b2e31d0ca6bb26cc6f525afd2",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator"
+}

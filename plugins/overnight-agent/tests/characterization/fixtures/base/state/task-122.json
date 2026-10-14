@@ -1,0 +1,27 @@
+{
+  "id": "122",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t122-v1",
+  "processed_file_hash": "8a41ad832aa95798df528a754053feef962b8a558a1eb04cfe0b95831070931b",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator",
+  "session": {
+    "session_id": "66666666-7777-4888-9999-000000000000",
+    "kind": "chat",
+    "project": "",
+    "workspace": "",
+    "workspace_type": "folder",
+    "created_at": "{{NOW-2d}}",
+    "last_woken_at": "{{NOW-1d}}",
+    "state": "dead",
+    "prior_session_id": "",
+    "prior_session_ids": [],
+    "replaced_at": null
+  }
+}

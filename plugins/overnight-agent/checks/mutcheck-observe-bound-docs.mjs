@@ -148,6 +148,23 @@ async function suite(modPath) {
   );
   void sep;
 
+  // B5/B6 -- ITEM 4: THE NODE ENGINE WINS WHERE IT EXISTS. This pass writes state (doc -Observe)
+  // and a run keeps to one engine (they share one state lock file), so it uses the one the agent runs. The Node
+  // bundle lives only in a plugin tree; from the flat home that is the installed plugin's copy.
+  const pluginNode = join(pluginHere, '..', 'skills', 'overnight-agent', 'oa-state.mjs');
+  const profile = join('C:', 'Users', 'u');
+  const installedNode = join(profile, '.copilot', 'installed-plugins', 'focus-planner', 'overnight-agent', 'skills', 'overnight-agent', 'oa-state.mjs');
+  check(
+    'B5 plugin tree prefers oa-state.mjs over oa-state.ps1',
+    resolveOaState({ here: pluginHere, env: {}, exists: (p) => p === pluginState || p === pluginNode }) === pluginNode,
+    `got ${resolveOaState({ here: pluginHere, env: {}, exists: (p) => p === pluginState || p === pluginNode })}`
+  );
+  check(
+    'B6 flat OA home prefers the installed plugin oa-state.mjs over its own oa-state.ps1',
+    resolveOaState({ here: homeHere, env: { USERPROFILE: profile }, exists: (p) => p === homeState || p === installedNode }) === installedNode,
+    `got ${resolveOaState({ here: homeHere, env: { USERPROFILE: profile }, exists: (p) => p === homeState || p === installedNode })}`
+  );
+
   // ---- classifyAttempts: recovered vs. persistent ------------------------------------------
   // Before the retry existed, ONE attempt decided everything, so a transport hiccup and a
   // genuinely broken page printed the identical FAIL line. That made a FAIL here worthless as

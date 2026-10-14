@@ -105,8 +105,8 @@ This page records **known gaps and forward direction** from the **163 open issue
 | #21 | — | Rebrand: rename Azure AD app + Google OAuth consent screen to "Planner" | Updating with detailed instructions and a verified PowerShell snippet. |
 | #18 | — | Local-first storage with background cloud sync via service worker | Rework the storage layer so all reads/writes hit a local store first (instant UI), and a service-worker-driven sync engine propagates changes to cloud providers (OneDrive, Google Drive) in the background. The whole thing ships as a… |
 | #12 | — | Move tasks between sources via right-click | Move tasks between sources via right-click |
-| #8 | tech-debt, cleanup | Remove multi-source backward-compat code (legacy fp-storage-provider, unsuffixed FSA handle, migrateLegacy) | 1. src/storage/fsa.js — legacy unsuffixed IndexedDB handle fallback Lines ~24–34 in restoreFolder(suffix). Adopts focus-planner-dir-handle → focus-planner-dir-handle:<suffix>. Becomes a no-op after one successful load (it deletes the legacy slot). Safe to remove once the production deploy has… |
-| #5 | — | Feature: Connect personal OneDrive folder and prepare for combined task view | Today, these contexts are split. Users cannot easily view personal + work tasks in one place. |
+| #8 | tech-debt, cleanup | Remove obsolete multi-source compatibility code — completed | Legacy provider selection, unsuffixed FSA-handle adoption, and multi-source migration were removed. Saved provider choices and their data/handles remain untouched. |
+| #5 | — | Connect a personal OneDrive folder; combined task view will not be built | OneDrive remains available as a single active board provider. Combining tasks from separate sources was explicitly removed from the product plan. |
 
 </details>
 
@@ -316,4 +316,3 @@ These issues focus on leaked sessions, polluted workspaces, stale locks, backup 
 | #481 | session-state is never pruned: 4,109 directories / 2.6 GB since April, and 488 stale locks sit in the path two liveness sweeps read | Measured 2026-09-04 ~06:33 PT from the overnight run, while verifying that the new zero-writer-sweep (related issue, shipped tonight as related issue) reads the right session id. It does -- but the directory it reads has never… |
 | #462 | Both new write-guards ship with caller-facing traps that fail toward the outcome they prevent: undefaulted writeFile, and a verdict object that duck-types into a duplicate post | Both safety contracts shipped tonight — lib-issue-body.mjs (issue related issue / PR related issue) and lib-issue-comments.mjs (issue related issue / PR related issue) — are correct, and both have caller-facing shapes that fail toward the exact… |
 | #456 | gh issue edit --body is an unguarded overwrite, and issue bodies carry no authorship - so "was my work overwritten?" cannot be answered either way | Editing an issue body with gh issue edit --body / --body-file is an unconditional whole-document overwrite. There is no base revision, no precondition, and no conflict detection. |
-

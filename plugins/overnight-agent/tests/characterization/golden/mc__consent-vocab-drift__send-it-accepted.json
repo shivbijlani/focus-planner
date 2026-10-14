@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/consent-vocab-drift/send-it-accepted",
+  "steps": [
+    {
+      "args": {
+        "Id": "920"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": "me",
+        "affirmative_phrase": "send it",
+        "affirmative_unattributed": false,
+        "consent_ok": true,
+        "human_segments": 1,
+        "id": "920",
+        "path": "<ROOT>/data/journal/task-920.md",
+        "reason": "human-authored-affirmative",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -29,6 +29,12 @@
   scan                          Emit the per-run worklist as JSON (what changed / reopened /
                                 due_poll).
   get    -Id <id>               Print one task's state JSON.
+  decisions -RunId <id> -ScanFile <compact-scan.json> [-Outcomes <json|file>]
+                                Append this run's DECISION RECORD to the coordinator run ledger
+                                (%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl): the ordered
+                                worklist with a one-word reason per row, every Today row even
+                                when ineligible, and what was dispatched, with times. Retains
+                                -RetainDays (default 7) of both ledger line kinds.
   consent -Id <id>              Print the CONSENT verdict for one task's journal as it stands
                                 now: has the HUMAN provably authorized something? Fail-CLOSED
                                 (see .CONSENT below). Ask this before any irreversible action.
@@ -88,8 +94,8 @@
                                 DIFFERENT id over a LIVE one throws `session_bind_conflict`;
                                 binding over a DEAD one is the replacement path and records the
                                 prior id. `-Force` overrides.
-          [-SessionKind <k>]    `code` or `folder`. `code` REQUIRES -SessionProject and
-                                -SessionWorkspace, and refuses the run session's own workspace.
+          [-SessionKind <k>]    `code` or `chat`; defaults to `chat`. Both require a
+                                project and workspace; chat uses the configured local folder.
           [-SessionProject <p>] The project the session must be created in -- the repository
                                 project for a code task, NOT the run session's project.
           [-SessionWorkspace <p>] The worktree/branch/folder path the session works in.
@@ -98,21 +104,24 @@
                                 can be refused. Defaults to the current directory.
           [-SessionDead]        Record that the session could not be woken. Flips the verdict to
                                 `replace` and arms the continuation kickoff.
-          [-SessionWoken]       Record that the run reused this session (stamps last_woken_at).
           [-CheckDispatch]      Check eligibility and pauses without recording a wake.
-          [-ForDispatch]        Check again and stamp the wake before oa_drain sends its
-                                start/continue instruction. Being busy does not prevent a nudge.
-          [-DispatchInput hash] Refuse a brief prepared against changed journal/task inputs.
+          [-ForDispatch]        Recheck eligibility and stamp the wake immediately before the
+                                coordinator sends its start/continue instruction.
+          [-PlanDispatch]       With -ForDispatch, admit a review-due agent proposal only;
+                                still checks the Today gate, pause and exact input hash.
+          [-DispatchInput hash] Required with -ForDispatch; exact scan fingerprint, refusing stale input.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
-          [-RunLimit]           Omit -Id to read this run's maximum outstanding normal requests.
-          [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
-          [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
                                 nothing pending. SKIPS any journal with trailing user content,
                                 so a real unanswered reply is never baselined away. Never
                                 writes to a journal.
+  whoami [-SessionId <sid>]     #727: this session's ROLE. Matches the id (default:
+                                $env:COPILOT_AGENT_SESSION_ID) against every task binding,
+                                current or replaced. `role: task` + `task_id` means do only that
+                                task; `coordinator` means no task is bound to it; `unknown`
+                                means no id was available. Read-only.
 
 .POLLING (why this exists)
   `scan` only flags journals the USER has touched, so a purely time-triggered job (e.g. #400's
@@ -137,19 +146,19 @@
   A due recheck grants NO new permission: it is a read-only look at whether the blocker is gone.
   Acting on the result still obeys the reversibility gate.
 
-.SESSIONS (#404 -- one task, one session, one workspace)
+.SESSIONS (#404 -- one task, one isolated session)
   Before this, the overnight agent DID THE WORK ITSELF, in the run session. Measured live on
   2026-09-02 against task #451: the run read the journal, edited four deliverable files and wrote
   the turn entirely inside the main overnight-agent session. Nothing was isolated, and nothing
-  recorded where the work had happened -- so the next run cold-started the same task. #391 already
-  states the rule ("per-item sub-sessions are isolation, not concurrency: one task, one workspace,
-  one thing being verified at a time"), but it stated it about a mechanism that did not exist.
-  This is that mechanism.
+  recorded where the work had happened -- so the next run cold-started the same task. #391 states
+  that per-item sub-sessions provide isolation, not concurrency, but the state did not yet record
+  that mechanism. Code tasks now use their own repository worktree; non-code tasks use a global
+  chat with no project or workspace.
 
   The binding lives HERE, in skill state, for the same reason every other machine fact does: the
   journal is the user's prose and carries no metadata. A `session` member holds the session id,
-  the project and workspace it was created in, its liveness, and -- when it replaced one that
-  could not be woken -- the id it continues.
+  its scope (project/worktree for code, neither for chat), its liveness, and -- when it replaced
+  one that could not be woken -- the id it continues.
 
   THE COMMAND RETURNS A VERDICT, NOT A FIELD. `session -Id <id>` answers the only question the
   run loop actually has -- create, reuse, or replace? -- so that answer is computed from state
@@ -159,7 +168,15 @@
     reuse    bound and live. Wake THAT session. Do not create a second one.
     replace  bound but marked dead by a previous `-SessionDead`. Create a fresh session whose
              kickoff is `kickoff_continuation` (emitted verbatim), which names the task and the
-             prior session id, then bind it -- which records `prior_session_id`.
+             prior session id, then bind it -- which records `prior_session_id` and appends the
+             outgoing session to the `prior_session_ids` lineage.
+
+  A BIND MAY ONLY MOVE FORWARD (#562). Replacement is a chain, never a cycle: a session id this
+  task has already retired can never become its binding again. Measured on task #471, where the
+  chain b94abe44 -> 42d1a304 -> 9294bd58 was written back onto 42d1a304 with 9294bd58 recorded as
+  its PRIOR -- the successor filed as the ancestor's predecessor, nine minutes after the successor
+  already existed. The newest session was orphaned while still charged against capacity (#345),
+  and every subsequent `replace` could flip the binding instead of advancing it.
 
   TWO REFUSALS CARRY THE WEIGHT, and both fail closed.
 
@@ -167,6 +184,11 @@
                             persisted session" is a suggestion: the second session gets created
                             anyway and simply overwrites the pointer to the first, which then
                             leaks (#345) with nothing recording that it ever existed.
+
+    session_bind_backwards  Binding an id already present in the task's retired lineage. Unlike
+                            the conflict above this is NOT overridable by -Force: a conflict can
+                            be a legitimate operator override, whereas re-binding a retired
+                            ancestor has no correct use. Recover with -SessionRelease.
 
     session_workspace_inherited   A `code` bind whose workspace is the RUN SESSION's own. This is
                             not hypothetical: the first attempt to delegate #404 called the
@@ -177,21 +199,10 @@
                             reintroduced by the delegation step itself. Inheritance is the
                             default everywhere, so it has to be refused explicitly.
 
-  RUN-LOCAL DRAIN (#391 / #589; user clarification 2026-09-22). `Overnight Agent concurrency`
-  is N outstanding normal instructions from THIS run, refilled after observed completion.
-  The oa_drain scheduler owns selection, send, observation, refill and cutoff in code.
-  It stops dispatching at the next :00/:30 after the coordinator's first prompt MINUS the
-  configured Overnight Agent start buffer (default 5m); reload never moves that deadline.
-  A later run may nudge or start tasks while earlier task sessions
-  finish. There is no global occupied-worker count derived from retained task state.
-
-  The coordinator prepares approved task briefs and their scan fingerprints. The drain processes
-  each task at most once per run, respecting fresh eligibility and pauses. A failed/unknown
-  delivery holds its opening until correlated task execution ends or this run reaches cutoff.
-  It never expires into permission to overfill this run, and never blocks a later run.
-  The settings precedence remains -Concurrency > user-settings.md > 1.
-  Start buffer accepts 0..29 whole minutes (optional m), defaults to 5 only when absent, and
-  reports malformed/unreadable values so the extension refuses enrollment rather than guessing.
+  DIRECT DISPATCH (#716). The coordinator owns the sequence: resolve each session, skip paused
+  tasks, then use -ForDispatch with the exact scan fingerprint immediately before sending.
+  `Overnight Agent concurrency` limits accepted sends still active from this run; earlier task
+  sessions do not reserve capacity. The start cutoff is coordinator guidance, not an extension timer.
 
   CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
   (`scripts/remove-worktree.ps1`), because the raw `git worktree remove --force` deletes THROUGH a
@@ -423,10 +434,16 @@
 
 .SETTINGS (which values the user owns)
   Most parameters here are paths the agent passes in. TWO are read from `user-settings.md` by
-  THIS SCRIPT instead, under `## Overnight Agent behaviour`:
+  THIS SCRIPT instead, as `| Setting | Value |` rows anywhere in the file:
 
     Today gate backstop   hours, default 6, accepts `off`   -> -TodayGateBackstopHours
     Today gate strict     on|off, default off               -> -TodayGateStrict
+
+  ANYWHERE IN THE FILE is the literal rule, corrected here rather than restated (GH #579). This
+  block used to say the rows live "under `## Overnight Agent behaviour`". That section has never
+  existed in the live settings file, and `Get-SettingRow` does not look at headings at all -- it
+  matches the row by its name wherever it appears. A user following the old sentence would have
+  created a section that changes nothing, which is worse than no instruction.
 
   Read here rather than passed in, on purpose. A forgotten PATH argument fails loudly -- the
   journal folder is not found and the run stops. A forgotten NUMBER fails SILENTLY: the gate uses
@@ -438,7 +455,11 @@
   default. An absent, unreadable, empty or malformed settings file yields the built-in defaults
   EXACTLY -- a settings file can change a value that is already in service, but can never be the
   reason the gate stops working. `scan` reports the resolved values per Today row
-  (`gate_backstop_hours`, `gate_strict`), so a configured value that is not applying is visible.
+  (`gate_backstop_hours`, `gate_strict`) AND where each came from (`gate_backstop_source`,
+  `gate_strict_source`: `default`/`settings`/`settings-malformed`/`argument`), so a configured
+  value that is not applying is visible. The source is what makes that sentence true: the value
+  alone cannot distinguish "you configured 6" from "nothing is configured and 6 is built in",
+  and measured 2026-09-25 all three user-owned controls were in the second state.
 
   The exhaustion TTL is deliberately NOT exposed: it currently governs both how long a
   declaration survives and how recently a turn must have been written to make one, so raising it
@@ -474,7 +495,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami', 'critical-tools', 'decisions')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -504,6 +525,62 @@ param(
   [int]$BudgetKB = 24,
   [switch]$Json,
   [switch]$Verify,
+
+  # --- `scan` output shape (#711) ---------------------------------------------------------
+  #
+  # The full worklist is ~500 KB of JSON on the live corpus, which no agent can read inside one
+  # tool result -- so the run that cannot read it dispatches nothing, which is the same outcome
+  # as the scan having failed. These two switches make the SAME data readable without changing
+  # what is computed: `scan` still derives every row and every verdict, and the default output
+  # is still the full array, byte-for-byte, for every existing caller.
+  #
+  # `-Compact` keeps the rows a run acts on (see Test-CompactRowNeeded) with the fields it acts
+  # with, plus a summary carrying the counts for everything dropped. It is a PROJECTION, never a
+  # different computation: a row is not omitted because it was cheap to skip, it is omitted
+  # because nothing reads it, and the count of omissions is reported.
+  #
+  # `-ScanOutFile` writes the whole thing to a file and prints the summary, for the caller that
+  # wants every field and can grep it.
+  [switch]$Compact,
+  [string]$ScanOutFile,
+
+  # --- the decision record (#561) ---------------------------------------------------------
+  #
+  # WHY THIS IS A COMMAND HERE AND NOT JSON THE COORDINATOR WRITES. The ordered worklist, each
+  # row's eligibility and the reason a higher-ranked row was skipped exist only in memory during
+  # a run, so "why did this run pick #362 while Today #245 sat there?" was answerable only by
+  # re-deriving the decision afterwards -- and only while the state happened not to have moved.
+  # A run that hand-wrote its own record would be doing the same self-reporting SKILL.md's
+  # wrap-up paragraph already does; this way the record is DERIVED from the same `scan -Compact`
+  # output the run acted on, and the outcome vocabulary is a closed enum rather than prose.
+  #
+  # It appends to the EXISTING coordinator run ledger (#762), not a second log, so one file
+  # answers both "did the run start?" and "what did it decide?".
+  [string]$RunId,
+  # The `scan -Compact` output the run selected from -- a file, so the record cites the same
+  # bytes the run read. A full (array) scan is refused: it carries no summary to quote.
+  [string]$ScanFile,
+  # What became of each row, as JSON or a file holding it:
+  # `[{ "id": "362", "outcome": "dispatched", "at": "...", "sessionId": "..." }]`.
+  # `-Outcome` words are a CLOSED ENUM for the same reason `-Action` is: a free-text reason is
+  # prose about the run written by the run, which is exactly what this record replaces.
+  [string]$Outcomes,
+  [string]$RunLedger = "$env:LOCALAPPDATA\overnight-agent\run-ledger.jsonl",
+  # The stated ceiling (#262's lesson): a week of 30-minute runs, both line kinds, is retained
+  # and everything older is dropped on the next append.
+  [int]$RetainDays = 7,
+  [int]$MaxDecisionRows = 50,
+  # Injected clock, so the record and the retention window are testable without waiting a week.
+  [string]$DecisionNow,
+
+  # How long to WAIT for a lock before giving up (#778). PHASE 0 runs several steps at once, and
+  # the old 10 s fail-fast turned an ordinary queue behind a 60-90 s `scan` into
+  # `state_lock_timeout`, which the model then had to retry by hand -- a whole turn spent on
+  # "wait your turn". Waiting is the correct answer to a held lock; failing is only correct when
+  # the holder is stuck. The default (see $script:DefaultLockWaitSeconds) is the scan's own
+  # budget, so a queued caller outlasts the longest legitimate holder. Zero means "use the
+  # default"; `OA_STATE_LOCK_WAIT_SECONDS` overrides it for a whole run.
+  [int]$LockWaitSeconds = 0,
 
   # The agent gate (#297). `-Action` is a CLOSED ENUM on purpose: free text would put the
   # matcher's input under the control of whatever prose the agent happened to generate, which is
@@ -559,7 +636,7 @@ param(
   # kind. `code` is the constrained one -- it demands a project and a workspace and refuses the
   # run session's own.
   [string]$SessionId,
-  [ValidateSet('code', 'folder')]
+  [ValidateSet('code', 'chat')]
   [string]$SessionKind,
   [string]$SessionProject,
   [string]$SessionWorkspace,
@@ -569,25 +646,25 @@ param(
   # session actually is -- so the inheritance refusal works without the caller having to opt in.
   [string]$RunWorkspace,
   [switch]$SessionDead,
-  [switch]$SessionWoken,
-  # The native drain checks first, persists its run state, then stamps the wake
-  # before sending (#532). Neither flag measures whether another task is running.
+  # Inspection is read-only; -ForDispatch is the only dispatch-authorising wake stamp.
   [switch]$CheckDispatch,
   [switch]$ForDispatch,
+  # An agent-authored legacy proposal can be sent for classified, non-gated work without
+  # fabricating a human approval or writing a second turn in the same wake.
+  [switch]$PlanDispatch,
   [string]$DispatchInput,
-  [switch]$RunLimit,
+  # JSON response from the native get_sessions_status tool, saved by the coordinator.
+  [string]$SessionsStatusFile,
+  [string[]]$RequiresTools,
+  [string]$CapabilitiesPath = "$env:LOCALAPPDATA\overnight-agent\capabilities.json",
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
   [string]$WorkspaceGone,
-  [switch]$InFlight,
-  # Overrides the `Overnight Agent concurrency` settings row for one invocation. -1 is the
-  # "not specified" sentinel; see Resolve-PacingSettings for the precedence.
-  [int]$Concurrency = -1,
-
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
   [string]$StateDir = "$env:LOCALAPPDATA\overnight-agent\state",
+  [string]$SessionStateDir = "$HOME/.copilot/session-state",
   # The board, so `scan` can tell the agent which tasks are currently snoozed
   # (<!-- snooze:YYYY-MM-DD --> markers, from the #353 snooze feature). Sits next to the
   # journal dir by default; override to match a non-standard planner layout.
@@ -637,6 +714,7 @@ param(
   # override it to point at a sandbox copy (which is the only way to test the resolution without
   # touching the live planner folder).
   [string]$UserSettings,
+  [string]$McpConfig = (Join-Path $HOME '.copilot/mcp-config.json'),
   # The exhaustion DECLARATION itself (#310). See .EXHAUSTION in the header and
   # Set-ExhaustionDeclaration below. Value is the list of things the run examined; it is
   # REQUIRED to be non-empty, because a declaration that names nothing is indistinguishable
@@ -647,6 +725,54 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$settingsValueScript = Join-Path $PSScriptRoot 'settings-value.ps1'
+if (Test-Path -LiteralPath $settingsValueScript) {
+  . $settingsValueScript
+} else {
+  function ConvertFrom-SettingCell([string]$Cell) {
+    $match = [regex]::Match([string]$Cell, '`([^`]*)`')
+    if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    return ([string]$Cell).Trim()
+  }
+}
+
+# --- Sandbox mode (tests/e2e/run-sandbox.ps1) ----------------------------------------------
+#
+# INERT UNLESS AN ENVIRONMENT VARIABLE IS SET. The live agent sets none of these, so every
+# default above binds exactly as it always has. The e2e harness sets them so an end-to-end run
+# of the Overnight Agent can never read or write the live planner or the live OA home:
+#   OVERNIGHT_AGENT_HOME        replaces %LOCALAPPDATA%\overnight-agent in unbound defaults
+#   OVERNIGHT_AGENT_PLANNER_DIR replaces %USERPROFILE%\OneDrive\Apps\Focus Planner likewise
+#   OA_SANDBOX_ROOT             tripwire: any resolved path outside it is a hard error
+# An explicitly passed parameter always wins over an override, and is still tripwired.
+function Assert-OaSandboxPath([string]$Path, [string]$What) {
+  if (-not $env:OA_SANDBOX_ROOT -or -not $Path) { return }
+  $root = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+    [Environment]::ExpandEnvironmentVariables($env:OA_SANDBOX_ROOT)).TrimEnd('\', '/')
+  $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+    [Environment]::ExpandEnvironmentVariables($Path)).TrimEnd('\', '/')
+  $inside = [string]::Equals($full, $root, [StringComparison]::OrdinalIgnoreCase) -or
+    $full.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+  if (-not $inside) { throw "oa_sandbox_violation: $What '$full' is outside OA_SANDBOX_ROOT '$root'" }
+}
+if ($env:OVERNIGHT_AGENT_HOME) {
+  $oaHomeOverride = $env:OVERNIGHT_AGENT_HOME
+  if (-not $PSBoundParameters.ContainsKey('StateDir')) { $StateDir = Join-Path $oaHomeOverride 'state' }
+  if (-not $PSBoundParameters.ContainsKey('RunLedger')) { $RunLedger = Join-Path $oaHomeOverride 'run-ledger.jsonl' }
+  if (-not $PSBoundParameters.ContainsKey('CapabilitiesPath')) { $CapabilitiesPath = Join-Path $oaHomeOverride 'capabilities.json' }
+}
+if ($env:OVERNIGHT_AGENT_PLANNER_DIR) {
+  $plannerOverride = $env:OVERNIGHT_AGENT_PLANNER_DIR
+  if (-not $PSBoundParameters.ContainsKey('JournalDir')) { $JournalDir = Join-Path $plannerOverride 'journal' }
+  if (-not $PSBoundParameters.ContainsKey('PlannerBoard')) { $PlannerBoard = Join-Path $plannerOverride 'planner.md' }
+  if (-not $PSBoundParameters.ContainsKey('PlannerCompleted')) { $PlannerCompleted = Join-Path $plannerOverride 'planner-completed.md' }
+  if (-not $PSBoundParameters.ContainsKey('SnoozeStore')) { $SnoozeStore = Join-Path $plannerOverride 'snooze.json' }
+  if (-not $PSBoundParameters.ContainsKey('GatePath')) { $GatePath = Join-Path $plannerOverride 'agent-gate.md' }
+}
+if ($env:OA_SANDBOX_ROOT -and $env:COPILOT_HOME) {
+  if (-not $PSBoundParameters.ContainsKey('SessionStateDir')) { $SessionStateDir = Join-Path $env:COPILOT_HOME 'session-state' }
+  if (-not $PSBoundParameters.ContainsKey('McpConfig')) { $McpConfig = Join-Path $env:COPILOT_HOME 'mcp-config.json' }
+}
 
 # --- The gate tunables, resolved from user-settings.md (#310 follow-up) --------------------
 #
@@ -687,8 +813,10 @@ function Get-UserSettingsPath {
     $env:OVERNIGHT_AGENT_SETTINGS,
     (Join-Path (Get-Location).Path 'user-settings.md'),
     (Join-Path (Split-Path -Parent $PlannerBoard) 'user-settings.md'),
-    "$env:USERPROFILE\OneDrive\Apps\Focus Planner\user-settings.md",
-    "$env:LOCALAPPDATA\overnight-agent\user-settings.md"
+    $(if ($env:OVERNIGHT_AGENT_PLANNER_DIR) { Join-Path $env:OVERNIGHT_AGENT_PLANNER_DIR 'user-settings.md' }
+      else { "$env:USERPROFILE\OneDrive\Apps\Focus Planner\user-settings.md" }),
+    $(if ($env:OVERNIGHT_AGENT_HOME) { Join-Path $env:OVERNIGHT_AGENT_HOME 'user-settings.md' }
+      else { "$env:LOCALAPPDATA\overnight-agent\user-settings.md" })
   )
   foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return $c } }
   return $null
@@ -696,13 +824,345 @@ function Get-UserSettingsPath {
 
 function Get-SettingRow([string]$text, [string]$name) {
   # One `| Setting | Value |` row, matched on the setting name at the start of the cell. Returns
-  # the raw value cell, or $null. Case-insensitive, tolerant of surrounding whitespace and of the
-  # backticks the template uses, because a user who copies the formatting must not be punished.
+  # the shared value interpretation, or $null: first backtick span, otherwise the whole cell.
   if (-not $text) { return $null }
   $re = '(?im)^\s*\|\s*' + [regex]::Escape($name) + '\s*\|\s*([^|\r\n]*?)\s*\|'
   $m = [regex]::Match($text, $re)
   if (-not $m.Success) { return $null }
-  return ($m.Groups[1].Value -replace '`', '').Trim()
+  return ConvertFrom-SettingCell $m.Groups[1].Value
+}
+
+function Cmd-CriticalTools {
+  $names = @('google-workspace-agent-email', 'google-workspace')
+  $settingsPath = Get-UserSettingsPath
+  if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
+    $row = Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop) 'Critical tools'
+    if ($null -ne $row) {
+      $names = @($row -split ',' | ForEach-Object { $_.Trim() })
+      if (-not $names.Count -or @($names | Where-Object { -not $_ }).Count) {
+        throw 'Critical tools: empty tool name refused'
+      }
+    }
+  }
+  $config = Get-Content -LiteralPath $McpConfig -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  $configured = @($config.mcpServers.PSObject.Properties.Name)
+  foreach ($name in $names) {
+    if ($configured -notcontains $name) { throw "Critical tools: unknown MCP server '$name' in $McpConfig" }
+  }
+  [pscustomobject]@{ tools = @($names | Select-Object -Unique); settingsPath = $settingsPath } | ConvertTo-Json -Depth 3
+}
+
+function Cmd-Decisions {
+  if (-not $RunId) { throw 'decisions requires -RunId' }
+  if (-not $ScanFile) { throw 'decisions requires -ScanFile (the `scan -Compact` output)' }
+  if (-not (Test-Path -LiteralPath $ScanFile)) { throw "decisions_scan_missing: $ScanFile" }
+  $scan = Get-Content -LiteralPath $ScanFile -Raw | ConvertFrom-Json
+  if (-not ($scan.PSObject.Properties['summary'] -and $scan.PSObject.Properties['rows'])) {
+    throw 'decisions_requires_compact_scan: pass the output of `scan -Compact`, which carries summary + rows'
+  }
+  $now = Get-DecisionNow
+  $outcomes = Get-DecisionOutcomeMap
+
+  $scanRows = @($scan.rows)
+  $seen = @{}
+  $candidates = @()
+  foreach ($r in $scanRows) {
+    $id = "$($r.id)"
+    $section = "$($r.section)".ToLowerInvariant()
+    # WHICH ROWS ARE RECORDED. Every row with an outcome (it was acted on), every eligible row
+    # (the worklist the run chose from), and every TODAY row even when ineligible -- the last one
+    # because "nothing was eligible" with no named cause is the failure this record exists to
+    # make impossible. A quiet, ineligible, non-Today row is counted and not listed.
+    if (-not ($outcomes.ContainsKey($id) -or $r.eligible -or $section -eq 'today')) { continue }
+    $seen[$id] = $true
+    $candidates += [pscustomobject]@{
+      id       = $id
+      order    = if ($null -ne $r.order) { [int]$r.order } else { [int]::MaxValue }
+      section  = "$($r.section)"
+      eligible = [bool]$r.eligible
+      reason   = Get-DecisionReason $r $outcomes
+      today    = ($section -eq 'today')
+    }
+  }
+  # An outcome naming a row the compact scan omitted is still recorded: dropping it would hide
+  # the one class of decision that had a real effect.
+  foreach ($id in $outcomes.Keys) {
+    if ($seen[$id]) { continue }
+    $candidates += [pscustomobject]@{
+      id = "$id"; order = [int]::MaxValue; section = 'unlisted'; eligible = $false
+      reason = "$($outcomes[$id].outcome)"; today = $false
+    }
+  }
+
+  $ordered = @($candidates | Sort-Object -Property @{ Expression = 'order' }, @{ Expression = { '{0,10}' -f $_.id } })
+  # The cap never drops a row that was acted on or a Today row: those are the record's contract.
+  $must = @($ordered | Where-Object { $_.today -or $outcomes.ContainsKey($_.id) })
+  $rest = @($ordered | Where-Object { -not ($_.today -or $outcomes.ContainsKey($_.id)) })
+  $room = [Math]::Max(0, $MaxDecisionRows - $must.Count)
+  $keptIds = @{}
+  foreach ($r in ($must + @($rest | Select-Object -First $room))) { $keptIds[$r.id] = $true }
+  $kept = @($ordered | Where-Object { $keptIds[$_.id] } | ForEach-Object {
+      [ordered]@{
+        id = $_.id; order = if ($_.order -eq [int]::MaxValue) { $null } else { $_.order }
+        section = $_.section; eligible = $_.eligible; reason = $_.reason
+      }
+    })
+
+  $dispatched = @()
+  foreach ($r in $kept) {
+    if ($r.reason -ne 'dispatched') { continue }
+    $o = $outcomes[$r.id]
+    $stamp = $null
+    if ($o.PSObject.Properties['at'] -and "$($o.at)") {
+      # ConvertFrom-Json turns an ISO timestamp into a [datetime] in the HOST's zone; re-rendering
+      # it with "$x" would write the host's locale format into a durable record.
+      $stamp = ConvertTo-DecisionStamp $o.at
+    }
+    $dispatched += [ordered]@{
+      id = $r.id
+      at = if ($stamp) { $stamp } else { ConvertTo-DecisionStamp $now }
+      sessionId = if ($o.PSObject.Properties['sessionId']) { "$($o.sessionId)" } else { $null }
+    }
+  }
+
+  $s = $scan.summary
+  $record = [ordered]@{
+    schema     = 'oa-decisions/1'
+    kind       = 'decision'
+    runId      = $RunId
+    at         = ConvertTo-DecisionStamp $now
+    summary    = [ordered]@{
+      scan_seconds  = $s.scan_seconds
+      rows_total    = $s.rows_total
+      rows_eligible = $s.rows_eligible
+      rows_returned = $s.rows_returned
+      rows_omitted  = $s.rows_omitted
+      today_holding = $s.today_holding
+      rows_recorded = $kept.Count
+      rows_dropped  = ($ordered.Count - $kept.Count)
+    }
+    rows       = $kept
+    dispatched = $dispatched
+  }
+
+  $line = ConvertTo-Json -InputObject $record -Depth 6 -Compress
+  $dir = Split-Path -Parent $RunLedger
+  if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  [IO.File]::AppendAllText($RunLedger, "$line`n", (New-Object Text.UTF8Encoding($false)))
+  Limit-RunLedger $RunLedger $now $RetainDays
+  $line
+}
+
+function Get-DecisionNow {
+  if (-not $DecisionNow) { return [datetimeoffset]::Now }
+  $parsed = [datetimeoffset]::MinValue
+  if (-not [datetimeoffset]::TryParse($DecisionNow, [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+    throw "decisions_now_invalid: -DecisionNow must be an ISO timestamp, got '$DecisionNow'"
+  }
+  return $parsed
+}
+
+function ConvertTo-DecisionStamp($value) {
+  # EVERY timestamp in the record is UTC, in the same shape the run ledger's own `startedAt`
+  # already uses. A record is read on a machine other than the one that wrote it -- two lines in
+  # two different local offsets would make "which run came first?" a question about the writers'
+  # time zones rather than about the runs.
+  if ($null -eq $value) { return $null }
+  if ($value -is [datetimeoffset]) { return $value.ToUniversalTime().UtcDateTime.ToString('o') }
+  if ($value -is [datetime]) { return ([datetimeoffset]$value).ToUniversalTime().UtcDateTime.ToString('o') }
+  $parsed = [datetimeoffset]::MinValue
+  if ([datetimeoffset]::TryParse("$value", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+    return $parsed.ToUniversalTime().UtcDateTime.ToString('o')
+  }
+  return "$value"
+}
+
+# The closed outcome vocabulary. One word per row, so the record is queryable rather than
+# readable-only: "the Today gate has released on not_workable for 20 consecutive runs" is a grep.
+$script:DecisionOutcomeWords = @('dispatched', 'paused', 'cutoff', 'capacity', 'refused', 'failed_send', 'busy_from_earlier_run')
+
+function Get-DecisionOutcomeMap {
+  $map = @{}
+  if (-not $Outcomes) { return $map }
+  $raw = if (Test-Path -LiteralPath $Outcomes) { Get-Content -LiteralPath $Outcomes -Raw } else { $Outcomes }
+  $parsed = $null
+  try { $parsed = $raw | ConvertFrom-Json } catch {
+    throw 'decisions_outcomes_json: -Outcomes must be a JSON array, or a file holding one'
+  }
+  foreach ($o in @($parsed)) {
+    $id = "$($o.id)"
+    if (-not $id) { throw 'decisions_outcome_id: every outcome must name a row id' }
+    $word = "$($o.outcome)"
+    if ($script:DecisionOutcomeWords -notcontains $word) {
+      throw "decisions_outcome_word: '$word' is not one of $($script:DecisionOutcomeWords -join ', ')"
+    }
+    $map[$id] = $o
+  }
+  return $map
+}
+
+function Get-DecisionReason($row, $outcomes) {
+  $id = "$($row.id)"
+  if ($outcomes.ContainsKey($id)) { return "$($outcomes[$id].outcome)" }
+  if ($row.eligible -and $row.PSObject.Properties['dispatch_skip_reason'] -and "$($row.dispatch_skip_reason)") {
+    return "$($row.dispatch_skip_reason)"
+  }
+  if (-not $row.eligible) {
+    # `ineligible:<cause>` keeps the deciding fact rather than the bare verdict -- the exact
+    # distinction that made #501 (`done` -> `not_workable` -> gate released) a live inference.
+    $cause = ''
+    foreach ($field in @('today_release_reason', 'no_journal_reason', 'status')) {
+      if ($row.PSObject.Properties[$field] -and "$($row.$field)") { $cause = "$($row.$field)"; break }
+    }
+    if (-not $cause) { $cause = 'unknown' }
+    return 'ineligible:' + (ConvertTo-DecisionWord $cause)
+  }
+  return 'not_dispatched'
+}
+
+function ConvertTo-DecisionWord([string]$text) {
+  # ONE WORD, always. A reason carrying spaces would re-open the prose channel this closes.
+  $word = ($text.Trim().ToLowerInvariant() -replace '[^a-z0-9:_-]+', '_').Trim('_')
+  if (-not $word) { return 'unknown' }
+  if ($word.Length -gt 40) { return $word.Substring(0, 40) }
+  return $word
+}
+
+function Enter-OaFileLock([string]$target, [int]$timeoutSeconds, [string]$code) {
+  # A SHORT, FILE-SCOPED lock (#778), deliberately not the state mutex. The run ledger and
+  # capabilities.json are small files with their own writers -- one of them is Node
+  # (check-critical-tools.mjs), which cannot take a Windows named mutex -- so the lock they share
+  # has to be a lock file both runtimes can create exclusively. Holding the state lock for these
+  # writes is what made a capability record queue behind a 90 s `scan` and fail.
+  $lockPath = "$target.lock"
+  $dir = Split-Path -Parent $lockPath
+  if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  $deadline = (Get-Date).AddSeconds([Math]::Max(1, $timeoutSeconds))
+  while ($true) {
+    try {
+      $stream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+      $bytes = [Text.Encoding]::UTF8.GetBytes("$PID")
+      $stream.Write($bytes, 0, $bytes.Length)
+      $stream.Flush()
+      return $stream
+    }
+    catch [IO.IOException] {
+      # A lock file left behind by a killed writer must not wedge the ledger for ever: past the
+      # stale age nobody can still be inside a write that takes milliseconds.
+      $age = $null
+      try { $age = ((Get-Date) - ([IO.File]::GetLastWriteTime($lockPath))).TotalSeconds } catch { $age = $null }
+      if ($null -ne $age -and $age -gt $script:LockStaleSeconds) {
+        try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop; continue } catch { }
+      }
+      if ((Get-Date) -ge $deadline) {
+        throw "${code}: waited $timeoutSeconds s for $lockPath"
+      }
+      Start-Sleep -Milliseconds 50
+    }
+  }
+}
+
+function Get-OaStateLockFilePath([string]$lockKey) {
+  # The state lock FILE oa-state.mjs takes (core/lock.mjs, stateLockPath): the same key as the
+  # mutex, in the directory Node's os.tmpdir() names. Resolved the way Node resolves it (TEMP
+  # before TMP on Windows; TMPDIR first elsewhere), NOT [IO.Path]::GetTempPath(), which prefers
+  # TMP -- two processes that disagree about the directory would each hold "the" lock alone.
+  $dir = $null
+  if ($env:OS -eq 'Windows_NT') {
+    foreach ($v in @($env:TEMP, $env:TMP)) { if ($v) { $dir = $v; break } }
+    if (-not $dir) { $dir = Join-Path $(if ($env:SystemRoot) { $env:SystemRoot } else { $env:windir }) 'temp' }
+    if ($dir.Length -gt 1 -and $dir.EndsWith('\') -and -not $dir.EndsWith(':\')) { $dir = $dir.Substring(0, $dir.Length - 1) }
+  }
+  else {
+    foreach ($v in @($env:TMPDIR, $env:TMP, $env:TEMP)) { if ($v) { $dir = $v; break } }
+    if (-not $dir) { $dir = '/tmp' }
+    if ($dir.Length -gt 1 -and $dir.EndsWith('/')) { $dir = $dir.Substring(0, $dir.Length - 1) }
+  }
+  return [IO.Path]::GetFullPath((Join-Path $dir "oa-state-$lockKey.lock"))
+}
+
+function Test-OaLockHolderAlive([string]$lockPath) {
+  # Node's rule (core/lock.mjs holderAlive): a holder is DEAD only when the file names a PID and
+  # no such process exists. Unreadable, empty (mid-create) or unparsable all count as alive, so
+  # a doubt waits rather than steals a live writer's lock.
+  $text = $null
+  try { $text = [IO.File]::ReadAllText($lockPath) } catch { return $true }
+  $holder = 0
+  if (-not [int]::TryParse("$text".Trim(), [ref]$holder) -or $holder -le 0) { return $true }
+  if ($holder -eq $PID) { return $true }
+  try { $null = [Diagnostics.Process]::GetProcessById($holder); return $true }
+  catch [ArgumentException] { return $false }
+  catch { return $true }
+}
+
+function Enter-OaStateFileLock([string]$lockPath, [int]$timeoutSeconds) {
+  # THE ENGINES EXCLUDE EACH OTHER HERE. The named mutex below only excludes other PowerShell
+  # writers; oa-state.mjs cannot take a Windows mutex and locks this FILE instead. Taking it too
+  # (always first, then the mutex, so no two writers can hold one each and wait on the other)
+  # means a PowerShell `mark` and a Node `mark` on the same store queue rather than lose an
+  # update. Same path, same exclusive create, same dead-PID reclaim, no stale age (a long scan
+  # is a live holder, not a stale one).
+  $deadline = (Get-Date).AddSeconds([Math]::Max(1, $timeoutSeconds))
+  while ($true) {
+    try {
+      $stream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+      $bytes = [Text.Encoding]::UTF8.GetBytes("$PID")
+      $stream.Write($bytes, 0, $bytes.Length)
+      $stream.Flush()
+      return $stream
+    }
+    catch [IO.IOException] {
+      if (-not (Test-OaLockHolderAlive $lockPath)) {
+        try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop; continue } catch { }
+      }
+    }
+    catch [UnauthorizedAccessException] { }
+    if ((Get-Date) -ge $deadline) { return $null }
+    Start-Sleep -Milliseconds 50
+  }
+}
+
+function Exit-OaStateFileLock($stream, [string]$lockPath) {
+  if (-not $stream) { return }
+  try { $stream.Dispose() } catch { }
+  Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+}
+
+function Exit-OaFileLock($stream, [string]$target) {
+  if (-not $stream) { return }
+  try { $stream.Dispose() } catch { }
+  Remove-Item -LiteralPath "$target.lock" -Force -ErrorAction SilentlyContinue
+}
+
+function Limit-RunLedger([string]$path, [datetimeoffset]$now, [int]$retainDays) {
+  # BOUNDED BY AGE, over BOTH line kinds, so the ledger cannot grow without bound. A line whose
+  # timestamp does not parse is KEPT: this rewrites a file another writer appends to, and
+  # discarding what it cannot read would be a silent data loss worse than the growth.
+  if ($retainDays -le 0) { return }
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  $cutoff = $now.AddDays(-$retainDays)
+  $lines = @(Get-Content -LiteralPath $path -ErrorAction SilentlyContinue | Where-Object { "$_".Trim() })
+  $kept = @()
+  foreach ($line in $lines) {
+    $stamp = $null
+    try {
+      $entry = $line | ConvertFrom-Json
+      foreach ($field in @('startedAt', 'at')) {
+        if ($entry.PSObject.Properties[$field] -and "$($entry.$field)") { $stamp = "$($entry.$field)"; break }
+      }
+    }
+    catch { $stamp = $null }
+    $when = [datetimeoffset]::MinValue
+    if ($stamp -and [datetimeoffset]::TryParse($stamp, [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None, [ref]$when) -and $when -lt $cutoff) {
+      continue
+    }
+    $kept += $line
+  }
+  if ($kept.Count -eq $lines.Count) { return }
+  [IO.File]::WriteAllText($path, (($kept -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
 }
 
 function Resolve-GateSettings {
@@ -712,6 +1172,24 @@ function Resolve-GateSettings {
 
   $backstop = $script:GateDefaults.BackstopHours
   $strict = $script:GateDefaults.Strict
+  # GH #579: WHERE each value came from, not just what it is.
+  #
+  # The .SETTINGS block above promised that "`scan` reports the resolved values per Today row
+  # (`gate_backstop_hours`, `gate_strict`), so a configured value that is not applying is
+  # visible." It reported the VALUE and not its SOURCE, which does not deliver that: a row
+  # reading `gate_backstop_hours: 6` means either "you configured 6" or "nothing is configured
+  # and 6 is the built-in", and those are the two cases the sentence exists to separate.
+  #
+  # Measured live 2026-09-25: `Today gate backstop`, `Today gate strict` and `Overnight Agent
+  # concurrency` are ALL absent from user-settings.md, so all three controls are on built-in
+  # defaults -- and only concurrency said so, through `concurrency_source`.
+  #
+  # Same vocabulary as `$script:ConcurrencySource`, deliberately, so one word means one thing
+  # across every setting this script resolves: `default` (nothing configured), `settings` (read
+  # from the file), `settings-malformed` (a row exists and does not parse), `argument` (an
+  # explicit command-line value outranks the file).
+  $backstopSource = 'default'
+  $strictSource = 'default'
 
   if (-not ($explicitBackstop -and $explicitStrict)) {
     $path = Get-UserSettingsPath
@@ -725,117 +1203,83 @@ function Resolve-GateSettings {
         if ($v) {
           # Accepts `6`, `6h`, `6 hours`, `off`. Anything else is ignored rather than guessed at,
           # because a typo must not silently disable a safety backstop.
-          if ($v -match '^(?i)(off|none|disabled)$') { $backstop = 0 }
-          elseif ($v -match '^\s*(\d+)') { $backstop = [int]$Matches[1] }
+          #
+          # An ignored row is now REPORTED rather than merely ignored, which is the whole point
+          # of #579: falling through to the default was indistinguishable from never having
+          # configured it, so a typo looked exactly like an unset control.
+          $backstopSource = 'settings-malformed'
+          if ($v -match '^(?i)(off|none|disabled)$') { $backstop = 0; $backstopSource = 'settings' }
+          elseif ($v -match '^\s*(\d+)') { $backstop = [int]$Matches[1]; $backstopSource = 'settings' }
         }
         $s = Get-SettingRow $text 'Today gate strict'
-        if ($s -match '^(?i)(on|yes|true)$') { $strict = $true }
+        if ($null -ne $s -and $s -ne '') {
+          # Both directions are a CONFIGURED value. Reading only the on-spellings meant `off`
+          # resolved to false through the default path, so a user who deliberately turned strict
+          # off was reported identically to one who had never heard of the setting.
+          $strictSource = 'settings-malformed'
+          if ($s -match '^(?i)(on|yes|true)$') { $strict = $true; $strictSource = 'settings' }
+          elseif ($s -match '^(?i)(off|no|false)$') { $strict = $false; $strictSource = 'settings' }
+        }
       }
     }
   }
 
-  if (-not $explicitBackstop) { $script:BackstopHours = $backstop } else { $script:BackstopHours = $TodayGateBackstopHours }
+  if (-not $explicitBackstop) { $script:BackstopHours = $backstop } else { $script:BackstopHours = $TodayGateBackstopHours; $backstopSource = 'argument' }
   # The legacy `-TodayServedMinutes 0` spelling still forces strict, whatever the file says: it is
   # an explicit instruction on the command line and outranks a stored preference.
-  if ($explicitStrict) { $script:GateStrict = [bool]$TodayGateStrict }
+  if ($explicitStrict) { $script:GateStrict = [bool]$TodayGateStrict; $strictSource = 'argument' }
   else { $script:GateStrict = [bool]$strict }
-  if ($TodayServedMinutes -eq 0) { $script:GateStrict = $true }
+  if ($TodayServedMinutes -eq 0) { $script:GateStrict = $true; $strictSource = 'argument' }
   # A negative backstop is the "not specified" sentinel leaking through an explicit -1; treat it
   # as the default rather than as "never fires", so the sentinel can never disable the backstop.
-  if ($script:BackstopHours -lt 0) { $script:BackstopHours = $script:GateDefaults.BackstopHours }
+  if ($script:BackstopHours -lt 0) { $script:BackstopHours = $script:GateDefaults.BackstopHours; $backstopSource = 'default' }
+  $script:BackstopSource = $backstopSource
+  $script:GateStrictSource = $strictSource
 }
 
-# --- Pacing: the concurrency tunable (#391, read here for #404) ----------------------------
+# --- Direct-dispatch cap: the concurrency tunable -----------------------------------------
 #
-# Same contract as the gate tunables above, and for the same reason: a NUMBER that reaches this
-# script as a flag the agent is told to pass fails SILENTLY when the flag is forgotten. So it is
-# read where it is used.
-#
-# The failure direction is deliberate and is the only one that is safe for a pacing control. An
-# absent, unreadable or malformed value yields 1 EXACTLY -- never "unlimited", never the last
-# value seen. A typo can therefore narrow a run; it can never widen one. A value below 1 is
-# clamped to 1; disable the workflow separately rather than treating zero as a drain width.
-#
-# THAT LAST GUARANTEE USED TO BE FALSE, and the way it failed is worth stating because it reads
-# as harmless. The parse was a LEADING-integer match, so that `2 tasks` would work -- but this
-# file's cells are prose, and prose in this settings file characteristically opens with a DATE.
-# Measured against the live user-settings.md conventions:
-#
-#     | Overnight Agent concurrency | 2026-09-02: set to 1 by Shiv |   ->  concurrency 2026
-#     | Overnight Agent concurrency | 3 - raised for the backlog   |   ->  concurrency 3
-#
-# A note about setting it to 1 therefore set it to 2026: unbounded in every practical sense, on
-# the one control whose entire job is to stop a run over-committing, silently, and in the exact
-# direction the paragraph above promises is impossible. So the parse is now ANCHORED: the cell
-# must be a bare whole number and nothing else.
-#
-# Anchoring costs the `2 tasks` leniency, and that trade is only safe because of the second half
-# of this change: a cell that does not parse is now REPORTED (`concurrency_source` =
-# `settings-malformed`) instead of silently becoming 1. Narrowing a run that the user can SEE was
-# narrowed is recoverable; widening one nobody can see is not.
+# This is the maximum number of send attempts the coordinator may make in one run. Resolve it
+# here so each session verdict reports the same configured cap and its provenance.
 $script:PacingDefaults = @{ Concurrency = 1 }
 
 function Resolve-PacingSettings {
-  $explicit = $script:ExplicitArgs.ContainsKey('Concurrency')
   $value = $script:PacingDefaults.Concurrency
-  # Where the value in force came from, so a cell that did not parse is visible rather than
-  # silently indistinguishable from an unset one. `settings-malformed` is the whole point: it is
-  # the difference between "1 because you asked for 1" and "1 because your row is a sentence".
   $source = 'default'
 
-  if (-not $explicit) {
-    $path = Get-UserSettingsPath
-    if ($path) {
-      $text = $null
-      try { $text = Read-JournalText $path } catch { $text = $null }
-      if ($text) {
-        $v = Get-SettingRow $text 'Overnight Agent concurrency'
-        # ANCHORED: the cell must be a bare whole number. `2` parses; `two`, `many`, `2 tasks`,
-        # `-3` and `2026-09-02: set to 1 by Shiv` do not, and all fall through to 1. See the
-        # block comment above for why the leading-integer form had to go -- it read a dated note
-        # as 2026, which is a WIDENING, and no pacing control may ever widen by accident.
-        if ($null -ne $v -and $v -ne '') {
-          $source = 'settings-malformed'
-          if ($v -match '^\s*(\d+)\s*$') {
-            $n = [int]$Matches[1]
-            if ($n -ge 1) { $value = $n; $source = 'settings' }
-          }
+  $path = Get-UserSettingsPath
+  if ($path) {
+    $text = $null
+    try { $text = Read-JournalText $path } catch { $text = $null }
+    if ($text) {
+      $v = Get-SettingRow $text 'Overnight Agent concurrency'
+      if ($null -ne $v -and $v -ne '') {
+        $source = 'settings-malformed'
+        if ($v -match '^\s*(\d+)\s*$') {
+          $n = [int]$Matches[1]
+          if ($n -ge 1) { $value = $n; $source = 'settings' }
         }
       }
     }
-  }
-  else { $value = $Concurrency; $source = 'argument' }
-
-  if ($value -lt 1) {
-    $value = $script:PacingDefaults.Concurrency
-    if ($source -eq 'argument') { $source = 'default' }
   }
   $script:ConcurrencyLimit = $value
   $script:ConcurrencySource = $source
 }
 
-function Get-StartBufferSettings {
+function Get-AgentModelSettings {
   $path = Get-UserSettingsPath
   $value = $null
   if ($path -and (Test-Path -LiteralPath $path)) {
-    try { $value = Get-SettingRow (Read-JournalText $path) 'Overnight Agent start buffer' }
+    try { $value = Get-SettingRow (Read-JournalText $path) 'Overnight Agent model' }
     catch {
-      return [pscustomobject]@{
-        minutes = $null; source = 'settings-unreadable'
-        error = "Cannot read Overnight Agent start buffer: $($_.Exception.Message)"
-      }
+      return [pscustomobject]@{ model = 'auto'; source = 'settings-unreadable' }
     }
   }
-  if ($null -eq $value) { return [pscustomobject]@{ minutes = 5; source = 'default'; error = $null } }
-  $minutes = 0
-  if ($value -match '^(\d+)\s*m?$' -and [int]::TryParse($Matches[1], [ref]$minutes) -and $minutes -lt 30) {
-    return [pscustomobject]@{ minutes = $minutes; source = 'settings'; error = $null }
+  if ($null -eq $value) { return [pscustomobject]@{ model = 'auto'; source = 'default' } }
+  if ($value -match '^(?i)(auto|claude-(?:sonnet|opus|haiku)-[0-9]+(?:\.[0-9]+)?|gpt-[0-9]+(?:\.[0-9]+)?(?:-[a-z0-9]+)*|gemini-[0-9]+(?:\.[0-9]+)?-[a-z0-9-]+|grok-[0-9]+(?:\.[0-9]+)?|mai-code-[0-9]+(?:\.[0-9]+)?-[a-z0-9-]+)$') {
+    return [pscustomobject]@{ model = $value.ToLowerInvariant(); source = 'settings' }
   }
-  # Falling back to a smaller buffer could start work later than the user intended.
-  [pscustomobject]@{
-    minutes = $null; source = 'settings-malformed'
-    error = 'Overnight Agent start buffer must be whole minutes from 0 to 29 (for example 5m); no new drain may start until corrected.'
-  }
+  return [pscustomobject]@{ model = 'auto'; source = 'settings-malformed' }
 }
 
 function Ensure-StateDir {
@@ -844,11 +1288,62 @@ function Ensure-StateDir {
 
 function Get-Sha256([string]$text) {
   # Normalise newlines so OneDrive CRLF/LF churn never looks like a user edit.
-  $norm = ($text -replace "`r`n", "`n")
+  #
+  # `String.Replace` and `BitConverter`, NOT `-replace` and a `ForEach-Object` pipeline (#711).
+  # Both of those are per-call regex/pipeline machinery running over whole journals, and this
+  # is called twice per row. The VALUE is byte-identical: an ordinal replace of a two-character
+  # literal is exactly what the regex did, and `BitConverter.ToString` lower-cased is the same
+  # lowercase hex the `x2` format produced. Hashes therefore keep matching every
+  # `processed_file_hash` already on disk -- a change of digest here would read as every journal
+  # having been edited.
+  $norm = $text.Replace("`r`n", "`n")
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($norm)
   $sha = [System.Security.Cryptography.SHA256]::Create()
-  try { ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '' }
+  try { ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
   finally { $sha.Dispose() }
+}
+
+# --- Memoised pure readers (#711) --------------------------------------------------------
+#
+# WHY THIS EXISTS. `scan` re-derived the same facts from the same strings many times per
+# journal: the fence mask is taken over the full content by BOTH Get-AgentEndIndex and
+# Get-AboveSentinelRegion, over `$agentLeft` by Get-NewestAgentTurn -- which is itself called
+# up to four times per row via Get-DeclaredAsk, Test-HasBlockingAsk and Test-HasOpenAsk -- and
+# again over each newest turn. Measured on the live corpus (272 journals, 6.9 MB): 224 s in the
+# field, 104 s warm, of which Get-JournalFacts was 30 s and was dominated by that repetition.
+#
+# EVERY MEMOISED FUNCTION BELOW IS A PURE FUNCTION OF ITS STRING ARGUMENT. That is the whole
+# safety argument and it is checkable by reading each one: they take text, they read no file,
+# no clock and no state, and they return a value derived only from that text. Memoising such a
+# function cannot change a verdict; it can only stop the verdict being recomputed. Functions
+# that touch the filesystem or the clock are deliberately NOT in here.
+#
+# The cache is per-process and dies with the invocation, so there is no staleness window across
+# runs. It is capped because `extract` and `mark` can feed it large one-off strings and an
+# unbounded table on a 6.9 MB corpus is a memory leak with extra steps; on overflow it is
+# cleared wholesale rather than evicted cleverly, because a correct cheap policy beats a clever
+# one for something whose miss cost is "do the work we used to do every time anyway".
+$script:MemoTables = @{}
+$script:MemoMaxEntries = 4096
+
+function Get-Memoised([string]$table, [string]$key, [scriptblock]$compute) {
+  $t = $script:MemoTables[$table]
+  if ($null -eq $t) {
+    # An ORDINAL dictionary, never PowerShell's `@{}`. `@{}` is a Hashtable with a
+    # case-INSENSITIVE comparer, so every lookup case-folds the whole key -- and these keys are
+    # whole journals. Measured while building this (#711): the case-insensitive version made
+    # scan SLOWER than the un-memoised original, because each hit paid a 25 KB case conversion
+    # to avoid work that cost less than the conversion. Ordinal is also the correct comparison:
+    # two journals differing only in case are different journals.
+    $t = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $script:MemoTables[$table] = $t
+  }
+  $hit = $null
+  if ($t.TryGetValue($key, [ref]$hit)) { return $hit }
+  $value = & $compute
+  if ($t.Count -ge $script:MemoMaxEntries) { $t.Clear() }
+  $t[$key] = $value
+  return $value
 }
 
 # A journal turn is stamped with a provenance marker, `<!-- from: <author> -->`. Exactly ONE
@@ -901,11 +1396,19 @@ $script:FenceOpenRe  = '^[ ]{0,3}(?<f>`{3,}|~{3,})(?<info>[^\r\n]*)$'
 $script:FenceCloseRe = '^[ ]{0,3}(?<f>`{3,}|~{3,})[ \t]*$'
 
 function Get-FenceMaskedText([string]$text) {
-  # Same-length copy of $text with fenced-code characters replaced by spaces. Newlines are
-  # never masked, so line numbering, `(?m)` anchors and all offsets are identical to $text.
+  # Memoised (#711): the SAME string is masked by several readers per journal -- the full
+  # content by both Get-AgentEndIndex and Get-AboveSentinelRegion, `$agentLeft` by every path
+  # through Get-NewestAgentTurn. This is a pure function of $text, so caching it cannot change
+  # a verdict. The key IS the text; a hashtable lookup hashes it once, which is cheaper by
+  # orders of magnitude than re-walking every line.
   if ([string]::IsNullOrEmpty($text)) { return $text }
   if ($text.IndexOf('`') -lt 0 -and $text.IndexOf('~') -lt 0) { return $text }
+  return (Get-Memoised 'fenceMask' $text { Get-FenceMaskedTextCore $text })
+}
 
+function Get-FenceMaskedTextCore([string]$text) {
+  # Same-length copy of $text with fenced-code characters replaced by spaces. Newlines are
+  # never masked, so line numbering, `(?m)` anchors and all offsets are identical to $text.
   $sb = [System.Text.StringBuilder]::new($text.Length)
   $i = 0
   $len = $text.Length
@@ -919,28 +1422,45 @@ function Get-FenceMaskedText([string]$text) {
     $raw = $text.Substring($i, $lineEnd - $i)
     $line = $raw.TrimEnd("`r")
 
+    # A fence line is `^[ ]{0,3}(`{3,}|~{3,})`, so a line whose first non-space character in
+    # the first four columns is neither a backtick nor a tilde cannot match EITHER pattern
+    # (#711). Checking that with four character comparisons skips the regex on the ~95% of
+    # journal lines that are ordinary prose. This is a pre-filter, not a second matcher: every
+    # line that could match still reaches the same regex below and is judged by it alone.
+    $couldFence = $false
+    $probe = [Math]::Min(4, $line.Length)
+    for ($p = 0; $p -lt $probe; $p++) {
+      $ch = $line[$p]
+      if ($ch -eq '`' -or $ch -eq '~') { $couldFence = $true; break }
+      if ($ch -ne ' ') { break }
+    }
+
     $mask = $false
     if (-not $inFence) {
-      $m = [regex]::Match($line, $script:FenceOpenRe)
-      if ($m.Success) {
-        # An info string may not contain a backtick when the fence is backticks (CommonMark),
-        # which keeps inline code like `a``b` from opening a block.
-        $f = $m.Groups['f'].Value
-        $info = $m.Groups['info'].Value
-        if (-not ($f[0] -eq '`' -and $info.Contains('`'))) {
-          $inFence = $true
-          $fenceChar = [string]$f[0]
-          $fenceLen = $f.Length
-          $mask = $true
+      if ($couldFence) {
+        $m = [regex]::Match($line, $script:FenceOpenRe)
+        if ($m.Success) {
+          # An info string may not contain a backtick when the fence is backticks (CommonMark),
+          # which keeps inline code like `a``b` from opening a block.
+          $f = $m.Groups['f'].Value
+          $info = $m.Groups['info'].Value
+          if (-not ($f[0] -eq '`' -and $info.Contains('`'))) {
+            $inFence = $true
+            $fenceChar = [string]$f[0]
+            $fenceLen = $f.Length
+            $mask = $true
+          }
         }
       }
     }
     else {
       $mask = $true
-      $c = [regex]::Match($line, $script:FenceCloseRe)
-      if ($c.Success) {
-        $cf = $c.Groups['f'].Value
-        if ([string]$cf[0] -eq $fenceChar -and $cf.Length -ge $fenceLen) { $inFence = $false }
+      if ($couldFence) {
+        $c = [regex]::Match($line, $script:FenceCloseRe)
+        if ($c.Success) {
+          $cf = $c.Groups['f'].Value
+          if ([string]$cf[0] -eq $fenceChar -and $cf.Length -ge $fenceLen) { $inFence = $false }
+        }
       }
     }
 
@@ -990,6 +1510,14 @@ $script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go a
 # script does either. That is not an implementation detail -- it is the property that makes the
 # file a trustworthy consent channel (see .GATE in the header), so any future edit that adds a
 # write here destroys the guarantee rather than extending the feature.
+#
+# AND THAT IS NOW ASSERTED, NOT JUST STATED (#326). `mutcheck-agent-gate.ps1` arm
+# `N-gate-never-written` seeds a real gate, runs the whole command surface against it -- `gate`,
+# `scan`, `get`, `consent` with and without `-Action`, both an allow and a floor verdict, and
+# `mark` -- and requires the file to still exist with byte-identical content after each one.
+# Mutant M13 is the proof it bites: it appends a `last_read` stamp after a successful parse,
+# which reads as a tidy-up in review and is exactly the shape this comment used to be the only
+# defence against.
 
 # --- structure: kept in lockstep with src/config/agentGate.js -----------------------------
 # The web app is the WRITER of this file and this is the READER, so the two must agree on
@@ -1220,6 +1748,86 @@ function Read-AgentGate([string]$path) {
   $result.ask = @($parsed.Ask)
   $result.state = if ($result.allow.Count -eq 0 -and $result.ask.Count -eq 0) { 'malformed' } else { 'ok' }
   return [pscustomobject]$result
+}
+
+# --- WHERE HE CAN APPROVE (spec: Decisions, "Where a user can approve") ---------------------------
+#
+# Each approval channel has a rule, set in an `## Approvals` section of agent-gate.md (the file he
+# owns and the agent never writes), with these defaults:
+#
+#   app: editor                                   the journal, written through the app's editor
+#   google-doc: no-signature + not-in-sent-ledger his catch-up-doc comment; the agent posts AS him,
+#                                                 so a comment counts only when it carries no
+#                                                 agent signature AND its id is not in the
+#                                                 sent-messages ledger write-turn keeps
+#
+# Only those two channels have a reader in this engine. Teams and mail have none, so they can never
+# approve here whatever the file says (a channel that is not enabled can never approve). Telegram
+# replies reach the journal through the bridge, which folds only his chat.
+#
+# FAIL CLOSED. `off` (or never / disabled / none / no) switches a channel off; any OTHER value is a
+# rule this engine does not know how to enforce, so the channel is OFF too -- never the default.
+# A gate file that exists but cannot be read switches every channel off. An absent file, an absent
+# section or an absent line is the default.
+$script:ApprovalChannelDefaults = [ordered]@{ 'app' = 'editor'; 'google-doc' = 'no-signature + not-in-sent-ledger' }
+
+function Get-ApprovalRuleVerdict([string]$channel, [string]$rule) {
+  $v = ([regex]::Replace($rule.Replace('`', ''), '\s+', ' ')).Trim().ToLowerInvariant()
+  if (@('off', 'never', 'disabled', 'none', 'no') -contains $v) { return 'off' }
+  if ($channel -eq 'app') { if ($v -eq 'editor') { return 'enabled' }; return 'unrecognised' }
+  $tokens = @($v.Split('+') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+  if ($tokens.Count -eq 2 -and $tokens -contains 'no-signature' -and $tokens -contains 'not-in-sent-ledger') { return 'enabled' }
+  return 'unrecognised'
+}
+
+function Read-ApprovalChannels([string]$path) {
+  $out = [ordered]@{}
+  foreach ($k in $script:ApprovalChannelDefaults.Keys) {
+    $out[$k] = [pscustomobject]@{ enabled = $true; reason = ''; rule = $script:ApprovalChannelDefaults[$k]; source = 'default' }
+  }
+  if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $out }
+  $text = $null
+  try { $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false))) }
+  catch {
+    foreach ($k in @($out.Keys)) { $out[$k] = [pscustomobject]@{ enabled = $false; reason = 'unreadable'; rule = ''; source = 'agent-gate' } }
+    return $out
+  }
+  $lines = ($text -replace "`r`n", "`n" -replace "`r", "`n") -split "`n"
+  $start = -1; $depth = 0
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $h = [regex]::Match($lines[$i], $script:GateHeadingRe)
+    if ($h.Success -and $h.Groups[2].Value.Trim().ToLowerInvariant() -eq 'approvals') { $start = $i; $depth = $h.Groups[1].Value.Length; break }
+  }
+  if ($start -lt 0) { return $out }
+  for ($j = $start + 1; $j -lt $lines.Count; $j++) {
+    $n = [regex]::Match($lines[$j], $script:GateHeadingRe)
+    if ($n.Success -and $n.Groups[1].Value.Length -le $depth) { break }
+    $m = [regex]::Match($lines[$j], '^\s*(?:[-*+]\s+)?`?([A-Za-z][A-Za-z-]*)`?\s*:\s*(.*?)\s*$')
+    if (-not $m.Success) { continue }
+    $name = $m.Groups[1].Value.ToLowerInvariant()
+    if (-not $out.Contains($name)) { continue }
+    $verdict = Get-ApprovalRuleVerdict $name $m.Groups[2].Value
+    # Once off, a channel stays off: a second line can only narrow, never re-open it.
+    if (-not $out[$name].enabled) { continue }
+    $out[$name] = [pscustomobject]@{
+      enabled = ($verdict -eq 'enabled'); reason = $(if ($verdict -eq 'enabled') { '' } else { $verdict })
+      rule = $m.Groups[2].Value.Trim(); source = 'agent-gate'
+    }
+  }
+  return $out
+}
+
+function Get-ApprovalOffReason($channel, [string]$name) { "approvals-channel-$($channel.reason):$name" }
+
+# The sent-messages ledger write-turn keeps (`write-turn.mjs record-sent`), resolved exactly as the
+# writer resolves it, so the reader never looks somewhere the writer did not write.
+function Get-SentLedgerPath {
+  $oaHome = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME }
+  elseif ($env:OVERNIGHT_AGENT_HOME) { $env:OVERNIGHT_AGENT_HOME }
+  elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
+  else { $null }
+  if (-not $oaHome) { return $null }
+  return (Join-Path $oaHome 'sent-messages.jsonl')
 }
 
 function Get-GateRepoTokens([string]$rule) {
@@ -1509,6 +2117,13 @@ function Get-NewestAgentTurn([string]$agentLeft) {
   # The agent's LAST turn only. Scoping is what keeps this honest: an ask answered three turns
   # ago is not an open ask, and testing the whole block would leave a task awaiting forever.
   if ([string]::IsNullOrEmpty($agentLeft)) { return '' }
+  # Memoised (#711): pure function of $agentLeft, and it is asked the same question up to four
+  # times per row -- directly, and again through Get-DeclaredAsk, Test-HasBlockingAsk and
+  # Test-HasOpenAsk.
+  return (Get-Memoised 'newestAgentTurn' $agentLeft { Get-NewestAgentTurnCore $agentLeft })
+}
+
+function Get-NewestAgentTurnCore([string]$agentLeft) {
   # Scan the fence mask so a heading or marker inside a quoted example cannot be mistaken for
   # the start of a real turn (#320). Offsets are mask-identical, so the substring is of the
   # original text.
@@ -1551,6 +2166,14 @@ function Get-DeclaredAsk([string]$agentLeft) {
   #
   # LAST match wins within the turn, matching every other "the newest statement is the true one"
   # rule in this file.
+  #
+  # Memoised (#711) for the same reason as Get-NewestAgentTurn: pure in $agentLeft, and asked
+  # twice per row (Get-BlockingAskVerdict and Test-HasOpenAsk both open with it).
+  if ([string]::IsNullOrEmpty($agentLeft)) { return '' }
+  return (Get-Memoised 'declaredAsk' $agentLeft { Get-DeclaredAskCore $agentLeft })
+}
+
+function Get-DeclaredAskCore([string]$agentLeft) {
   $turn = Get-NewestAgentTurn $agentLeft
   if ([string]::IsNullOrEmpty($turn)) { return '' }
   $scan = Get-FenceMaskedText $turn
@@ -2194,6 +2817,10 @@ function Get-JournalFacts([string]$path) {
     AskDeclared     = "$($askVerdict.declared)"           # blocking | offer | none | '' (undeclared)
     Consent         = $consent   # #227: fail-CLOSED authorship verdict
     Trailing        = $trailing
+    # The bytes every field above was derived from, so a caller that needs the journal text
+    # again (the doc-stamp fallback, #711) does not have to re-read the file off disk. It is
+    # the exact string Read-JournalText returned; nothing here re-decodes or normalises it.
+    Content         = $content
     Legacy          = Parse-LegacyOaState $content
   }
 }
@@ -2202,7 +2829,11 @@ function State-Path([string]$id) { Join-Path $StateDir "task-$id.json" }
 
 function Read-State([string]$id) {
   $p = State-Path $id
-  if (Test-Path $p) { return (Get-Content -Raw $p | ConvertFrom-Json) }
+  # `[IO.File]::ReadAllText`, not `Get-Content -Raw` (#711). `Get-Content` builds a provider
+  # pipeline per call, which `scan` pays once per journal; this reads the same bytes with none
+  # of it. JSON is UTF-8 by contract here (Write-JsonAtomic writes it with a BOM), and
+  # ReadAllText honours the BOM, so the decoded text is identical.
+  if (Test-Path $p) { return ([IO.File]::ReadAllText($p) | ConvertFrom-Json) }
   return $null
 }
 
@@ -2649,6 +3280,59 @@ $script:ClosedStatus = @('done', 'skip')
 # because the agent proposing a plan is also `proposed`.
 $script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })
 
+# GH #593. How long a `doc -Observe` stays evidence that a channel is quiet.
+#
+# THIS CONSTANT IS DEFINED HERE BECAUSE THREE FILES ALREADY SAY IT IS. `catchup-doc-sweep.mjs`,
+# `observe-bound-docs.mjs` and `run-sweeps.ps1` each cite `$script:DocObservationFreshMinutes`
+# by name, describing it as "oa-state.ps1's own freshness rule" and "the system's OWN" -- and it
+# did not exist in this file. Each of them carried its own literal 180 while documenting itself
+# as deferring to a shared definition, which is the worst of both: three copies that read as
+# one, so changing "the" threshold would have moved one of them and silently left two behind.
+# Defining it where they already point makes the deference real.
+#
+# 180 minutes is their value, adopted rather than chosen, so arming this changes no behaviour
+# anywhere. Overridable for the same reason the sweep allows OA_DOC_FRESH_MINUTES: a mutation
+# arm has to be able to make a fresh observation stale without waiting three hours.
+$script:DocObservationFreshMinutes = if ($env:OA_DOC_FRESH_MINUTES) { [int]$env:OA_DOC_FRESH_MINUTES } else { 180 }
+
+# The provenance verdict for one doc channel, as a word rather than as an absent number.
+#
+# #593's defect in one line: `doc_new_comments: 0` means "checked, he said nothing", "last
+# checked five days ago", and "never checked in this task's life" -- identically, on the one
+# worklist a run actually reads. A count is only as good as the read behind it, and the row
+# carried the count without the read.
+#
+# `unread` is deliberately its own word rather than a very old `stale`. A channel that has never
+# been read has no evidence either way; one read four hours ago has evidence that has merely
+# expired. They justify different actions, and collapsing them is how "never observed" hid
+# inside a number that looked measured.
+function Get-DocChannelState($doc) {
+  if (-not $doc -or -not "$($doc.doc_id)") { return $null }
+  $raw = $doc.observed_at
+  if ($null -eq $raw -or -not "$raw") { return 'unread' }
+  # #808: ConvertFrom-Json has already turned the stored ISO stamp into a [datetime]. Rendering it
+  # back to text ("$x") drops its offset, TryParse then yields Kind=Unspecified, and ToLocalTime()
+  # reads that as UTC -- shifting the age by the host's UTC offset (7-8 h in Seattle; 0 on the UTC
+  # CI runners, which is why nothing saw it). Use the parsed value by its kind; parse a string only
+  # as an instant with its own offset (no offset = local, as written by Now-Iso).
+  $local = $null
+  if ($raw -is [datetime]) {
+    $local = if ($raw.Kind -eq [DateTimeKind]::Utc) { $raw.ToLocalTime() } else { $raw }
+  }
+  elseif ($raw -is [datetimeoffset]) { $local = $raw.LocalDateTime }
+  else {
+    $dto = [datetimeoffset]::MinValue
+    # An unparseable stamp is NOT fresh. It is a stamp nobody can evaluate, and reading it as
+    # current would manufacture exactly the false confidence this field exists to remove.
+    if (-not [datetimeoffset]::TryParse("$raw", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeLocal, [ref]$dto)) { return 'unread' }
+    $local = $dto.LocalDateTime
+  }
+  $age = ([datetime]::Now - $local).TotalMinutes
+  if ($age -ge $script:DocObservationFreshMinutes) { return 'stale' }
+  return 'fresh'
+}
+
 # WHO closed it (#501). `$script:ClosedStatus` names the closed STATUSES; this names the closed
 # TASKS, and the two are not the same set -- which is the whole bug.
 #
@@ -2749,8 +3433,80 @@ function Test-UserPaused($row, $journalFacts) {
   if (-not $row) { return $false }
   if ("$($row.status_by)".ToLowerInvariant() -ne 'user') { return $false }
   if ($script:PausedStatus -notcontains "$($row.status)".ToLowerInvariant()) { return $false }
-  if ($journalFacts -and $journalFacts.HasTrailingHuman) { return $false }
+  if ($journalFacts -and $journalFacts.HasTrailingHuman -and (Test-ResumeIsAfterPause $row $journalFacts)) { return $false }
   return $true
+}
+
+# GH #734 -- A REPLY IS THE RESUME, BUT ONLY A REPLY WRITTEN *AFTER* THE PAUSE.
+#
+# THE DEFECT. The resume rule above asked one question -- "is there a human message below the
+# agent's newest turn?" -- and a pause is very often recorded while exactly such a message is
+# sitting there, because that message IS the pause. Measured 2026-09-28 on task #472: the state
+# store read `status: blocked, status_by: user` (his journal said "skip using Ai and agent for
+# this task"), the journal's trailing region was his own checklist, and `session -Id 472` still
+# returned `replace`, then `reuse` after the bind, and `-ForDispatch` returned
+# `dispatch_authorised: true`. The 14:00 run woke the task he had stopped. The pause only became
+# visible AFTERWARDS, when the task session wrote its refusal turn below his message and the
+# trailing region went quiet -- i.e. the guard worked in every moment except the one that mattered.
+#
+# So the old reader treated the PAUSE ITSELF as its own resume, and did it silently, on a */30
+# schedule. That is the exact failure #540 exists to prevent, wearing the costume of #540's fix.
+#
+# THE FIX IS ORDERING, AND IT DEMANDS POSITIVE EVIDENCE. A trailing human message clears a pause
+# only when it can be shown to have arrived AFTER the pause was recorded:
+#
+#   paused_at absent   -> NOT a resume. We do not know when the pause was recorded, so nothing
+#                         can be shown to post-date it. Task #472's live state carries
+#                         `paused_at: null` and is precisely this case.
+#   observed later     -> resume. `unanswered_user_message_at` is when a run FIRST SAW a human
+#                         message standing unanswered; later than `paused_at` means he wrote
+#                         after being paused.
+#   journal written later -> resume. The pause-recording `mark` stamps the terminator BEFORE it
+#                         stamps `paused_at`, so a journal whose last write post-dates the stamp
+#                         carries text he added afterwards.
+#
+# WHY FAILING CLOSED IS RIGHT HERE, AND IT IS NOT SYMMETRIC. Over-honouring a pause costs one
+# declined dispatch and says so out loud: `verdict: paused` is printed, and he resumes by replying
+# again or by a run recording his decision with `-StatusBy user`. Under-honouring it overrides a
+# human instruction with no trace -- which is what #540, and then this issue, both measured. The
+# rest of this file already chooses that direction (#227, #272, #465) and so does this.
+#
+# NOTHING HERE IS A SECOND SOURCE OF TRUTH. The pause is still the one recorded fact
+# (`status` + `status_by`); `paused_at` remains a timestamp FOR that fact, used here as the clock
+# it always was, and the journal is read for its own mtime rather than for a new flag.
+function Test-ResumeIsAfterPause($row, $journalFacts) {
+  if (-not $row -or -not $journalFacts) { return $false }
+  $pausedAt = Get-IsoDate $(if ($row.PSObject.Properties['paused_at']) { $row.paused_at } else { $null })
+  # No recorded pause time -- nothing can be proven to come after it. See above: this is the
+  # measured #734 shape, and standing pat is the loud, cheap direction.
+  if (-not $pausedAt) { return $false }
+  $seenAt = Get-IsoDate $(if ($row.PSObject.Properties['unanswered_user_message_at']) { $row.unanswered_user_message_at } else { $null })
+  if ($seenAt -and $seenAt -gt $pausedAt) { return $true }
+  try {
+    if ($journalFacts.Path -and (Test-Path -LiteralPath "$($journalFacts.Path)")) {
+      $written = (Get-Item -LiteralPath "$($journalFacts.Path)").LastWriteTime
+      if ($written -gt $pausedAt) { return $true }
+    }
+  }
+  catch {
+    # A journal we cannot stat is not evidence that he replied. Leave the pause standing.
+    return $false
+  }
+  return $false
+}
+
+function Get-IsoDate($value) {
+  # Parse-or-nothing. An unparseable timestamp is NOT a date, and must never be silently read as
+  # [datetime]::MinValue -- that would make every comparison against it succeed and turn an
+  # unreadable stamp into a resume.
+  if (-not $value) { return $null }
+  if ($value -is [datetime]) { return ([datetime]$value).ToLocalTime() }
+  $parsed = [datetime]::MinValue
+  if ([datetime]::TryParse("$value", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+    return $parsed.ToLocalTime()
+  }
+  return $null
 }
 
 # An unanswered message from the human on work that is still OPEN (#501). Standing, not one-shot:
@@ -2952,7 +3708,347 @@ function Test-ExhaustionClaim($ex, $row, [string]$todayHash) {
   return 'declared_exhausted'
 }
 
+function Get-SessionActivities {
+  if (-not $SessionsStatusFile) { return $null }
+  if (-not (Test-Path -LiteralPath $SessionsStatusFile -PathType Leaf)) {
+    throw "session_status_missing: $SessionsStatusFile"
+  }
+  try {
+    $snapshot = Get-Content -LiteralPath $SessionsStatusFile -Raw -Encoding UTF8 -ErrorAction Stop |
+      ConvertFrom-Json -ErrorAction Stop
+  }
+  catch { throw "session_status_invalid: cannot read get_sessions_status snapshot: $_" }
+  if (-not $snapshot.PSObject.Properties['sessions'] -or $null -eq $snapshot.sessions) {
+    throw 'session_status_invalid: get_sessions_status snapshot must contain sessions'
+  }
+  $activities = @{}
+  foreach ($session in @($snapshot.sessions)) {
+    $sid = "$($session.id)"
+    if (-not $sid -or $activities.ContainsKey($sid)) {
+      throw 'session_status_invalid: session IDs must be nonempty and unique'
+    }
+    $activities[$sid] = "$($session.activity.status)"
+  }
+  return ,$activities
+}
+
+# ---- Lanes (docs/spec/Domain-lanes.md) -----------------------------------------------------
+# Which tasks THIS PC's agent may work. READ ONLY: `agent-lanes.json` (beside planner.md) is the
+# app's file alone -- nothing here writes it and write-turn's G20 refuses it as a target, because a
+# PC that could edit it could give itself any task. Its ABSENCE turns lanes off, and with lanes off
+# nothing in scan or session changes by a single byte (Read-Lanes returns $null and every caller
+# short-circuits). oa-state-lib/plan/lanes.mjs is the twin; the characterization goldens pin both.
+$script:LanesFile = 'agent-lanes.json'
+$script:LanesSchema = 'fp-agent-lanes@1'
+$script:LaneReserved = @('none', 'any', 'all', 'catchall', 'default')
+$script:LanesMaxBytes = 256 * 1024
+$script:LaneWalkMaxDepth = 16
+$script:LaneTagRe = '(?<![\p{L}\p{N}])#[Ll][Aa][Nn][Ee]:([A-Za-z0-9_-]*)'
+$script:ScanLanes = $null
+
+function Test-LaneName($name, [switch]$AllowNone) {
+  if ($name -isnot [string] -or -not [regex]::IsMatch($name, '^[a-z][a-z0-9-]{0,31}$')) { return $false }
+  if ($name -ceq 'none') { return [bool]$AllowNone }
+  return -not ($script:LaneReserved -ccontains $name)
+}
+
+function ConvertTo-CanonicalTaskId([string]$id) {
+  $s = [regex]::Replace("$id", '^0+(?=\d)', '')
+  if ($s -match '^\d+$') { return $s } else { return $null }
+}
+
+# A JSON object as an ordered map of its members (last duplicate wins, first position kept), the
+# way JavaScript's JSON.parse sees it. $null when the element is not an object.
+function ConvertFrom-LaneJsonObject($el) {
+  if ($el.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $null }
+  # Ordinal: JSON member names are case-sensitive (`[ordered]@{}` would fold "Lanes" into "lanes").
+  $m = New-Object System.Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal)
+  foreach ($p in $el.EnumerateObject()) {
+    if ($m.Contains($p.Name)) { $m[$p.Name] = $p.Value } else { $m.Add($p.Name, $p.Value) }
+  }
+  return ,$m
+}
+
+function Read-LanesFileBytes([string]$path) {
+  $bytes = [IO.File]::ReadAllBytes($path)
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    return (New-Object Text.UTF8Encoding($false)).GetString($bytes, 3, $bytes.Length - 3)
+  }
+  return (New-Object Text.UTF8Encoding($false)).GetString($bytes)
+}
+
+# The file as a verdict: $null = absent (lanes OFF); otherwise state ok|invalid, reason, devices,
+# tasks. Any violation invalidates the WHOLE file (fail closed): dropping one device's entry would
+# silently widen that PC to catch-all. Keys are checked before values so the reason reported never
+# depends on key order.
+function Read-AgentLanesFile([string]$path) {
+  $bad = { param($reason) [pscustomobject]@{ state = 'invalid'; reason = $reason; devices = @{}; tasks = @{} } }
+  $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  if (-not $item) { return $null }
+  if ($item.PSIsContainer) { return (& $bad 'not_a_file') }
+  if ($item.Length -gt $script:LanesMaxBytes) { return (& $bad 'too_large') }
+  try { $text = Read-LanesFileBytes $path } catch { return (& $bad 'unreadable') }
+  if ($text.Trim().Length -eq 0) { return (& $bad 'empty') }
+  try { $docHandle = [System.Text.Json.JsonDocument]::Parse($text) } catch { return (& $bad 'not_json') }
+  try {
+    $doc = ConvertFrom-LaneJsonObject $docHandle.RootElement
+    if ($null -eq $doc) { return (& $bad 'not_object') }
+    if (-not $doc.Contains('schema') -or $doc['schema'].ValueKind -ne [System.Text.Json.JsonValueKind]::String -or
+        $doc['schema'].GetString() -cne $script:LanesSchema) { return (& $bad 'schema') }
+    $devices = @{}
+    if ($doc.Contains('devices')) {
+      $dm = ConvertFrom-LaneJsonObject $doc['devices']
+      if ($null -eq $dm) { return (& $bad 'devices') }
+      if ($dm.Count -gt 64) { return (& $bad 'too_many_devices') }
+      foreach ($k in $dm.Keys) { if ($k -cnotmatch '^[0-9a-f]{32}$') { return (& $bad 'device_key') } }
+      foreach ($k in $dm.Keys) {
+        $e = ConvertFrom-LaneJsonObject $dm[$k]
+        if ($null -eq $e) { return (& $bad 'device_entry') }
+        $lanes = New-Object System.Collections.Generic.List[string]
+        if ($e.Contains('lanes')) {
+          if ($e['lanes'].ValueKind -ne [System.Text.Json.JsonValueKind]::Array) { return (& $bad 'device_lanes') }
+          if ($e['lanes'].GetArrayLength() -gt 16) { return (& $bad 'too_many_lanes') }
+          foreach ($l in $e['lanes'].EnumerateArray()) {
+            if ($l.ValueKind -ne [System.Text.Json.JsonValueKind]::String) { return (& $bad 'device_lanes') }
+            $name = $l.GetString()
+            if (-not (Test-LaneName $name)) { return (& $bad 'device_lanes') }
+            if (-not $lanes.Contains($name)) { $lanes.Add($name) }
+          }
+        }
+        $catchAll = $false
+        if ($e.Contains('catchAll')) {
+          $kind = $e['catchAll'].ValueKind
+          if ($kind -eq [System.Text.Json.JsonValueKind]::True) { $catchAll = $true }
+          elseif ($kind -ne [System.Text.Json.JsonValueKind]::False) { return (& $bad 'device_catch_all') }
+        }
+        $sorted = [string[]]$lanes.ToArray()
+        [Array]::Sort($sorted, [StringComparer]::Ordinal)
+        $devices[$k] = [pscustomobject]@{ lanes = @($sorted); catchAll = $catchAll }
+      }
+    }
+    $tasks = @{}
+    if ($doc.Contains('tasks')) {
+      $tm = ConvertFrom-LaneJsonObject $doc['tasks']
+      if ($null -eq $tm) { return (& $bad 'tasks') }
+      if ($tm.Count -gt 2000) { return (& $bad 'too_many_tasks') }
+      foreach ($k in $tm.Keys) { if ($k -cnotmatch '^(?:0|[1-9][0-9]*)$') { return (& $bad 'task_id') } }
+      foreach ($k in $tm.Keys) {
+        $v = $tm[$k]
+        if ($v.ValueKind -ne [System.Text.Json.JsonValueKind]::String -or -not (Test-LaneName $v.GetString() -AllowNone)) {
+          return (& $bad 'task_lane')
+        }
+      }
+      foreach ($k in $tm.Keys) { $tasks[$k] = $tm[$k].GetString() }
+    }
+    return [pscustomobject]@{ state = 'ok'; reason = $null; devices = $devices; tasks = $tasks }
+  }
+  finally { $docHandle.Dispose() }
+}
+
+# This PC's device key, from the device.json the per-device publisher created in the agent home
+# (the parent of the state folder). Never created here: a PC with no identity has never announced,
+# so it cannot have been assigned anything.
+function Read-LaneDeviceKey([string]$stateDir) {
+  $file = Join-Path (Split-Path -Parent $stateDir) 'device.json'
+  if (-not (Test-Path -LiteralPath $file)) { return [pscustomobject]@{ state = 'none'; key = $null } }
+  $corrupt = [pscustomobject]@{ state = 'corrupt'; key = $null }
+  try {
+    $h = [System.Text.Json.JsonDocument]::Parse((Read-LanesFileBytes $file))
+  } catch { return $corrupt }
+  try {
+    $doc = ConvertFrom-LaneJsonObject $h.RootElement
+    if ($null -eq $doc -or -not $doc.Contains('schema') -or -not $doc.Contains('id')) { return $corrupt }
+    if ($doc['schema'].ValueKind -ne [System.Text.Json.JsonValueKind]::String -or $doc['schema'].GetString() -cne 'fp-agent-device@1') { return $corrupt }
+    if ($doc['id'].ValueKind -ne [System.Text.Json.JsonValueKind]::String) { return $corrupt }
+    $id = $doc['id'].GetString()
+    if ($id -cnotmatch '^[0-9a-fA-F-]{36}$') { return $corrupt }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("fp-device@1`n$($id.ToLowerInvariant())")) }
+    finally { $sha.Dispose() }
+    $hex = -join ($hash | ForEach-Object { $_.ToString('x2') })
+    return [pscustomobject]@{ state = 'ok'; key = $hex.Substring(0, 32) }
+  }
+  finally { $h.Dispose() }
+}
+
+# Board facts lanes need: per canonical ID, the #lane: tags of EVERY row and the Linked IDs of the
+# row Get-BoardMap keeps (the last). The Task cell is located by its table's own header.
+function Read-LaneBoard {
+  $tags = @{}
+  $linked = @{}
+  if (-not (Test-Path $PlannerBoard)) { return [pscustomobject]@{ tags = $tags; linked = $linked } }
+  $taskIdx = -1
+  $linkedIdx = -1
+  foreach ($line in ((Read-JournalText $PlannerBoard) -split "`r?`n")) {
+    if ($line -match '^##\s') { $taskIdx = -1; $linkedIdx = -1; continue }
+    if ($line -notmatch '^\s*\|') { continue }
+    $cells = @((($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() }))
+    if ($line -match '(?i)\bLinked\s*ID\b') {
+      for ($i = 0; $i -lt $cells.Count; $i++) { if ($cells[$i] -match '(?i)^Linked\s*ID$') { $linkedIdx = $i; break } }
+    }
+    $rawId = Get-BoardRowId $line
+    if (-not $rawId) {
+      for ($i = 0; $i -lt $cells.Count; $i++) { if ($cells[$i].ToLowerInvariant() -ceq 'task') { $taskIdx = $i; break } }
+      continue
+    }
+    $id = ConvertTo-CanonicalTaskId $rawId
+    if (-not $id) { continue }
+    if (-not $tags.ContainsKey($id)) { $tags[$id] = New-Object System.Collections.Generic.List[string] }
+    if ($taskIdx -ge 0 -and $taskIdx -lt $cells.Count) {
+      $cell = [regex]::Replace($cells[$taskIdx], '<!--.*?-->', '')
+      foreach ($m in [regex]::Matches($cell, $script:LaneTagRe)) { $tags[$id].Add($m.Groups[1].Value.ToLowerInvariant()) }
+    }
+    $linked[$id] = @(@(Get-BoardRowLinkedIds -Line $line -LinkedIndex $linkedIdx) |
+      ForEach-Object { ConvertTo-CanonicalTaskId $_ } | Where-Object { $_ })
+  }
+  return [pscustomobject]@{ tags = $tags; linked = $linked }
+}
+
+function Get-OwnLane([string]$id, $board, $tasks) {
+  $names = New-Object System.Collections.Generic.List[string]
+  $tagCount = 0
+  if ($board.tags.ContainsKey($id)) { foreach ($n in $board.tags[$id]) { $names.Add($n); $tagCount++ } }
+  if ($tasks.ContainsKey($id)) { $names.Add($tasks[$id]) }
+  if ($names.Count -eq 0) { return $null }
+  $source = if ($tagCount -gt 0) { 'tag' } else { 'map' }
+  $distinct = New-Object System.Collections.Generic.List[string]
+  foreach ($n in $names) { if (-not $distinct.Contains($n)) { $distinct.Add($n) } }
+  $cand = [string[]]$distinct.ToArray()
+  [Array]::Sort($cand, [StringComparer]::Ordinal)
+  foreach ($n in $cand) {
+    if (-not (Test-LaneName $n -AllowNone)) {
+      return [pscustomobject]@{ lane = $null; source = $source; problem = 'invalid'; candidates = @($cand) }
+    }
+  }
+  if ($cand.Count -gt 1) { return [pscustomobject]@{ lane = $null; source = $source; problem = 'conflict'; candidates = @($cand) } }
+  $lane = if ($cand[0] -ceq 'none') { $null } else { $cand[0] }
+  return [pscustomobject]@{ lane = $lane; source = $source; problem = $null; candidates = @() }
+}
+
+# Depth-first through Linked ID, parents in the order written; no task is visited twice in one
+# resolution (that also cuts cycles), and the walk stops after $script:LaneWalkMaxDepth levels.
+function Resolve-TaskLane([string]$id, $board, $tasks) {
+  $self = Get-OwnLane $id $board $tasks
+  if ($self) {
+    return [pscustomobject]@{ lane = $self.lane; source = $self.source; from = $null; problem = $self.problem; candidates = @($self.candidates) }
+  }
+  $visited = New-Object 'System.Collections.Generic.HashSet[string]'
+  [void]$visited.Add($id)
+  $stack = New-Object System.Collections.Generic.List[object]
+  # An explicit stack of (task, depth, next-parent-index) frames, so a deep chain cannot hit
+  # PowerShell's recursion limit and the order is exactly the recursive depth-first order.
+  $stack.Add(@($id, 0, 0))
+  while ($stack.Count -gt 0) {
+    $frame = $stack[$stack.Count - 1]
+    $tid = $frame[0]; $depth = $frame[1]; $next = $frame[2]
+    $parents = @(if ($board.linked.ContainsKey($tid)) { $board.linked[$tid] })
+    if ($depth -ge $script:LaneWalkMaxDepth -or $next -ge $parents.Count) { $stack.RemoveAt($stack.Count - 1); continue }
+    $frame[2] = $next + 1
+    $p = [string]$parents[$next]
+    if (-not $visited.Add($p)) { continue }
+    $o = Get-OwnLane $p $board $tasks
+    if ($o) {
+      return [pscustomobject]@{ lane = $o.lane; source = 'inherited'; from = $p; problem = $o.problem; candidates = @($o.candidates) }
+    }
+    $stack.Add(@($p, ($depth + 1), 0))
+  }
+  return [pscustomobject]@{ lane = $null; source = $null; from = $null; problem = $null; candidates = @() }
+}
+
+# Everything one command needs, or $null when lanes are off (no agent-lanes.json).
+function Read-Lanes {
+  $cfg = Read-AgentLanesFile (Join-Path (Split-Path -Parent $PlannerBoard) $script:LanesFile)
+  if ($null -eq $cfg) { return $null }
+  $device = Read-LaneDeviceKey $StateDir
+  $board = Read-LaneBoard
+  $state = 'ok'; $reason = $null
+  if ($cfg.state -ne 'ok') { $state = 'invalid'; $reason = $cfg.reason }
+  elseif ($device.state -eq 'corrupt') {
+    $state = 'device_identity_corrupt'
+    $reason = 'device.json in the agent home is not a readable fp-agent-device@1 file'
+  }
+  $entry = if ($state -eq 'ok' -and $device.key -and $cfg.devices.ContainsKey($device.key)) { $cfg.devices[$device.key] } else { $null }
+  return [pscustomobject]@{
+    state    = $state
+    reason   = $reason
+    device   = $device.key
+    assigned = [bool]$entry
+    serves   = @(if ($entry) { $entry.lanes })
+    catchAll = [bool]($state -eq 'ok' -and $(if ($entry) { $entry.catchAll } else { $true }))
+    board    = $board
+    tasks    = $cfg.tasks
+  }
+}
+
+function Get-LaneFacts($lanes, [string]$id) {
+  $cid = ConvertTo-CanonicalTaskId $id
+  if (-not $cid) { $cid = $id }
+  $r = Resolve-TaskLane $cid $lanes.board $lanes.tasks
+  $served = $false
+  if ($lanes.state -eq 'ok' -and -not $r.problem) {
+    $served = if ($null -eq $r.lane) { [bool]$lanes.catchAll } else { [bool]($lanes.serves -ccontains $r.lane) }
+  }
+  Add-Member -InputObject $r -NotePropertyName 'served' -NotePropertyValue $served -Force
+  return $r
+}
+
+function Add-LaneFields($lanes, $row) {
+  $f = Get-LaneFacts $lanes "$($row.id)"
+  Add-Member -InputObject $row -NotePropertyName 'lane' -NotePropertyValue $f.lane -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_source' -NotePropertyValue $f.source -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_from' -NotePropertyValue $f.from -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_problem' -NotePropertyValue $f.problem -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_candidates' -NotePropertyValue @($f.candidates) -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_served_here' -NotePropertyValue ([bool]$f.served) -Force
+}
+
+function New-LanesSummary($lanes, $rows) {
+  [ordered]@{
+    state            = $lanes.state
+    reason           = $lanes.reason
+    device           = $lanes.device
+    assigned         = [bool]$lanes.assigned
+    serves           = @($lanes.serves)
+    catch_all        = [bool]$lanes.catchAll
+    rows_out_of_lane = @($rows | Where-Object { $_.PSObject.Properties['lane_served_here'] -and -not $_.lane_served_here }).Count
+  }
+}
+
+# The dispatch / bind floor: throws when this PC must not wake or bind a session for task $id.
+function Assert-LaneServed([string]$id) {
+  $lanes = Read-Lanes
+  if ($null -eq $lanes) { return }
+  if ($lanes.state -eq 'invalid') {
+    throw ("session_lanes_config_invalid: $($script:LanesFile) does not validate ($($lanes.reason)); no task is " +
+      'dispatched or bound on this PC until he fixes it in the app. Do not dispatch it.')
+  }
+  $f = Get-LaneFacts $lanes $id
+  if ($f.served) { return }
+  if ($f.problem -eq 'conflict') {
+    throw ("session_lane_conflict: task $id has conflicting lanes ($(@($f.candidates) -join ', ')); no PC works it " +
+      'until he resolves it on the board or in the app. Do not dispatch or bind it.')
+  }
+  if ($f.problem -eq 'invalid') {
+    throw ("session_lane_invalid: task $id names an invalid lane ($(@($f.candidates) -join ', ')); no PC works it " +
+      'until he fixes it. Do not dispatch or bind it.')
+  }
+  if ($lanes.state -eq 'device_identity_corrupt') {
+    throw ("session_lane_not_served: this PC's device identity is unreadable, so it serves no lane; task $id " +
+      'is not dispatched or bound here. Do not dispatch it.')
+  }
+  $where = if ($f.source -eq 'tag') { 'from its #lane: tag' } elseif ($f.source -eq 'map') { 'from his assignment in the app' } else { "inherited from task $($f.from)" }
+  $what = if ($null -eq $f.lane) {
+    "task $id has no lane ($(if ($f.source) { $where } else { 'none set' }))"
+  } else { "task $id is in lane '$($f.lane)' ($where)" }
+  $parts = @($lanes.serves | ForEach-Object { "'$_'" })
+  if ($lanes.catchAll) { $parts += 'tasks with no lane' }
+  $serves = if ($parts.Count) { $parts -join ', ' } else { 'nothing' }
+  throw "session_lane_not_served: $what; this PC serves $serves. Another PC works it -- do not dispatch or bind it here."
+}
+
 function Get-ScanRows {
+  $activities = Get-SessionActivities
+  $agentModel = Get-AgentModelSettings
   $snooze = Get-SnoozeMap
   $board = Get-BoardMap
   $completed = Get-CompletedBoardIds
@@ -3050,9 +4146,11 @@ function Get-ScanRows {
     $pRank = 999999
     if ($prioRank.ContainsKey($facts.Id)) { $pRank = $prioRank[$facts.Id] }
     # #423: resolve the doc binding for this row (state first, journal stamp as fallback).
-    $docFacts = Get-DocState $st $f.FullName
+    $docFacts = Get-DocState $st $f.FullName $facts.Content
     # #404: the per-task session binding, read-only.
     $sessFacts = Get-SessionState $st
+    $sessionProcessDead = [bool](Test-SessionProcessDead "$($sessFacts.session_id)")
+    $activity = if ($null -ne $activities -and $sessFacts) { "$($activities["$($sessFacts.session_id)"])" } else { $null }
     [pscustomobject]@{
       id            = $facts.Id
       dispatch_input = (Get-DispatchInput $st $facts)
@@ -3146,15 +4244,49 @@ function Get-ScanRows {
       # user has said something on the doc that this run has not answered -- the doc-surface
       # analogue of `reopened`.
       doc_new_comments = if ($docFacts.doc) { @($docFacts.doc.pending_ids).Count } else { 0 }
+      # #593: the READ behind that number, on the same row as the number.
+      #
+      # `doc_observed_at` is the timestamp already in state, passed through verbatim -- it was
+      # returned by `doc -Id <n>` and by nothing the worklist reads. `doc_channel` is the
+      # verdict: `fresh` (checked recently, so a 0 was earned), `stale` (checked, but long
+      # enough ago that the 0 is no longer evidence), `unread` (never checked in this task's
+      # life), or `$null` when there is no channel to check.
+      #
+      # WHY THIS MATTERS MOST ON THE ROWS NOBODY SELECTS. A parked task -- `proposed`,
+      # `blocked`, waiting on Shiv -- is simultaneously the task MOST likely to receive a
+      # comment from him, because it is the one waiting on his word, and the LEAST likely to be
+      # selected and therefore polled. A comment there is exactly the event that should reopen
+      # it, and today it lands on a channel whose staleness is invisible.
+      #
+      # `scan` stays OFFLINE: this reads the stored stamp and never calls Google. The point is
+      # not to refresh the channel here, it is that the worklist can tell whether someone else
+      # did.
+      doc_observed_at = if ($docFacts.doc -and "$($docFacts.doc.observed_at)") { "$($docFacts.doc.observed_at)" } else { $null }
+      doc_channel     = (Get-DocChannelState $docFacts.doc)
       # #404: the per-task session, on the SAME worklist as everything else, for the reason #423
       # gives -- a binding that lives on a second list the run has to remember to consult is a
       # binding the run will forget. READ-ONLY here: `scan` reports the verdict, and only the
       # `session` command writes. A run that sees `session_verdict: reuse` must wake THAT session
       # rather than create a second one.
       session_id      = if ($sessFacts) { "$($sessFacts.session_id)" } else { $null }
+      session_activity = $activity
+      dispatch_skip_reason = if ($activity -eq 'busy') {
+        'busy_from_earlier_run'
+      } elseif ($null -ne $activities -and $sessFacts -and $activity -ne 'idle') {
+        'session_status_unknown'
+      } else { $null }
       session_state   = if ($sessFacts) { "$($sessFacts.state)" } else { $null }
-      session_verdict = (Get-SessionVerdict $sessFacts $st $facts)
+      session_verdict = (Get-SessionVerdict $sessFacts $st $facts $sessionProcessDead)
+      model           = $agentModel.model
+      model_source    = $agentModel.source
       session_workspace = if ($sessFacts -and "$($sessFacts.workspace)") { "$($sessFacts.workspace)" } else { $null }
+      # #717: the workspace is GONE, derived at read time, on the worklist itself. Without it a
+      # row that needs a replacement is indistinguishable from a healthy one until the wake fails.
+      session_workspace_missing = [bool](Test-WorkspaceMissing "$($sessFacts.workspace)" "$($sessFacts.workspace_type)")
+      # #728: process death is read from the session host's lock plus its stale event log.
+      session_process_dead = $sessionProcessDead
+      # Rolling count from persisted bind events, not from the current session's age.
+      replacements_24h = (Get-Replacements24h $st)
       # #540: the user said NOT NOW, as a column rather than something a caller must re-derive
       # from `status` + `status_by`. It is emitted for every row, bound or not, because a paused
       # task with no session must not be answered with `create` either.
@@ -3163,6 +4295,98 @@ function Get-ScanRows {
       # The standing exhaustion declaration for this row, verbatim (#310), so a human can audit
       # what the run claimed to have examined and against which board it claimed it.
       exhaustion     = if ($st -and $st.PSObject.Properties['today_exhausted']) { $st.today_exhausted } else { $null }
+    }
+  }
+
+  # ---- #534: a BOARD row with no journal file must not be invisible ------------------------
+  #
+  # This loop is journal-driven: it enumerates `task-*.md` and joins board data onto what it
+  # finds. A row that is ON THE BOARD but has no journal yet produces no row at all, so it is
+  # invisible to every phase -- it cannot be ordered, gated, proposed for, or counted.
+  #
+  # Measured live 2026-09-05: `## Today` row 1 (`473`, added that day) was absent from all 248
+  # scan rows. Nothing reported it. There is no error and no `eligible: false`; the id simply
+  # does not appear.
+  #
+  # That is the #346 shape on the PRIMARY worklist: "this task does not exist" and "this task
+  # exists and I could not see it" are byte-identical, because both are absence. It also makes
+  # an exhaustion declaration unsound -- a journal-less Today row cannot hold the gate, so
+  # `-Exhausted` can be declared truthfully over a Today section that still has unexamined rows.
+  #
+  # SURFACED, NOT INVENTED. The synthesised row carries `has_journal: false` and no journal
+  # facts, because there are none: every journal-derived field stays at its empty default
+  # rather than being guessed. It is emitted so the run can SEE the task and act on SKILL.md's
+  # existing instruction to create a journal for it -- guidance that was unreachable while the
+  # row was missing.
+  #
+  # Deliberately placed after the main loop and before the joins below, so a synthesised row
+  # gets the same `reopened_closed` treatment and the same deterministic ordering as any other.
+  # `@(...)` BEFORE APPENDING. `$rows` comes from a `foreach` used as an expression, so with a
+  # single journal it is a scalar PSObject and `+=` throws "does not contain a method named
+  # op_Addition" -- the same host-dependent array-unrolling trap this codebase records for
+  # `.Count` on a scalar. Forcing an array makes the append mean the same thing at any size.
+  $rows = @($rows)
+  $seenScanIds = @{}
+  foreach ($r in $rows) { $seenScanIds["$($r.id)"] = $true }
+  foreach ($bid in @($board.Keys)) {
+    if ($seenScanIds.ContainsKey("$bid")) { continue }
+    $b = $board[$bid]
+    $boardState = Read-State "$bid"
+    $rows += [pscustomobject]@{
+      id                    = "$bid"
+      status                = 'none'
+      changed               = $true
+      reopened              = $false
+      has_agent_block       = $false
+      # The fact that makes this row actionable rather than merely odd. A reader must be able
+      # to tell a synthesised row from a real one without inferring it from empty fields.
+      has_journal           = $false
+      tracked               = $false
+      snoozed               = $false
+      snooze_until          = $null
+      section               = "$($b.section)"
+      urgency               = "$($b.urgency)"
+      on_board              = $true
+      user_completed        = $false
+      status_by             = 'agent'
+      work_priority         = $b.work_priority
+      board_pos             = $b.pos
+      linked                = @($b.linked)
+      priorities_rank       = (Get-PrioritiesRank $b)
+      due_poll              = $false
+      poll_cadence          = $null
+      unanswered_user       = $false
+      unanswered_user_where = ''
+      session_paused        = $false
+      replacements_24h      = (Get-Replacements24h $boardState)
+      paused_at             = $null
+      exhaustion            = $null
+      # Why this row exists at all, in the row itself: a verdict a reader can audit beats one
+      # they have to reconstruct from which fields are empty.
+      no_journal_reason     = 'on the board, no journal file yet - create one before working it (#534)'
+    }
+  }
+
+  # Every row the main loop produced has a journal by construction; say so explicitly rather
+  # than leaving the field absent, or a consumer cannot distinguish "false" from "not reported".
+  foreach ($r in $rows) {
+    if (-not $r.PSObject.Properties['has_journal']) {
+      Add-Member -InputObject $r -NotePropertyName 'has_journal' -NotePropertyValue $true -Force
+    }
+  }
+
+  # #593, and the same rule one line above states: a field that is ABSENT on some rows cannot be
+  # read as a verdict on any of them. The #534 synthesised rows (on the board, no journal yet)
+  # carry no doc fields at all, so without this `doc_channel` would be missing exactly where a
+  # reader is most likely to be checking whether a channel was polled. Filled explicitly as
+  # "no channel" rather than left out, because the entire point of this field is that absence
+  # must stop being a silent answer.
+  foreach ($r in $rows) {
+    if (-not $r.PSObject.Properties['doc_observed_at']) {
+      Add-Member -InputObject $r -NotePropertyName 'doc_observed_at' -NotePropertyValue $null -Force
+    }
+    if (-not $r.PSObject.Properties['doc_channel']) {
+      Add-Member -InputObject $r -NotePropertyName 'doc_channel' -NotePropertyValue $null -Force
     }
   }
 
@@ -3193,6 +4417,14 @@ function Get-ScanRows {
     @{ Expression = { $_.board_pos } }, `
     @{ Expression = { [int]$_.id } }
 
+  # Lanes (docs/spec/Domain-lanes.md): with an agent-lanes.json beside the board, a row this PC
+  # does not serve is never eligible here and never holds the Today gate here. Without one (lanes
+  # off) nothing below changes.
+  $lanes = Read-Lanes
+  $script:ScanLanes = $lanes
+  if ($lanes) { foreach ($r in $rows) { Add-LaneFields $lanes $r } }
+  $notHere = { param($row) [bool]($lanes -and -not $row.lane_served_here) }
+
   # The gate is computed from the WHOLE set, so it cannot be evaluated per-row in the loop above.
   # NOTE this counts rows that still hold the gate SHUT, which is narrower than "workable": a
   # Today row the run has DECLARED EXHAUSTED stays workable (and eligible, at its own board rank)
@@ -3201,14 +4433,15 @@ function Get-ScanRows {
   $todayHash = Get-TodaySectionHash
   $verdicts = @{}
   foreach ($r in $rows) {
-    if ($r.section -eq 'today') { $verdicts["$($r.id)"] = (Get-TodayGateVerdict $r $todayHash) }
+    if ($r.section -eq 'today' -and -not (& $notHere $r)) { $verdicts["$($r.id)"] = (Get-TodayGateVerdict $r $todayHash) }
   }
   $todayHolding = @($verdicts.Values | Where-Object { $_.holds }).Count
   $order = 0
   foreach ($r in $rows) {
     $order++
     $eligible = $false
-    if (-not $r.snoozed) {
+    if (& $notHere $r) { $eligible = $false }
+    elseif (-not $r.snoozed) {
       # #170 cause 3: `reopened` beating the gate is rule 4, and it is right -- a live reply is
       # the highest-value work there is. But it must be a reply on work that is still OPEN.
       # This shortcut is the SECOND place the old "a reply always wins" rule lived, above the
@@ -3229,6 +4462,13 @@ function Get-ScanRows {
     $v = $verdicts["$($r.id)"]
     Add-Member -InputObject $r -NotePropertyName 'order' -NotePropertyValue $order -Force
     Add-Member -InputObject $r -NotePropertyName 'eligible' -NotePropertyValue $eligible -Force
+    # Review is not dispatch authority. Preserve the Today gate and human pause even for
+    # legacy proposals; a caller must opt into -PlanDispatch with this exact scan input.
+    $planReview = [bool]($r.status -eq 'proposed' -and $r.status_by -eq 'agent' -and
+      $r.on_board -and -not $r.snoozed -and -not $r.session_paused -and
+      -not $r.reopened -and -not $r.unanswered_user -and
+      ($r.section -eq 'today' -or $todayHolding -eq 0) -and -not (& $notHere $r))
+    Add-Member -InputObject $r -NotePropertyName 'plan_review_due' -NotePropertyValue $planReview -Force
     # Auditable: which Today rows are actually holding the backlog shut this run (#223 is
     # explicit that selection must be data, not the agent's judgement).
     Add-Member -InputObject $r -NotePropertyName 'holds_today_gate' `
@@ -3237,7 +4477,7 @@ function Get-ScanRows {
     # audited afterwards without re-deriving anything: either it says `declared_exhausted` and
     # the declaration is right there in `exhaustion`, or it does not and the skip was a bug.
     Add-Member -InputObject $r -NotePropertyName 'today_release_reason' `
-      -NotePropertyValue $(if ($null -ne $v) { "$($v.reason)" } else { $null }) -Force
+      -NotePropertyValue $(if ($null -ne $v) { "$($v.reason)" } elseif ($r.section -eq 'today' -and (& $notHere $r)) { 'lane_not_served' } else { $null }) -Force
     # The tunables AS RESOLVED for this run, on every Today row. Reporting the value that was
     # actually in force -- rather than the one someone believes they configured -- is what makes
     # a settings file auditable instead of merely present: a row that says `backstop_hours: 6`
@@ -3245,6 +4485,11 @@ function Get-ScanRows {
     if ($r.section -eq 'today') {
       Add-Member -InputObject $r -NotePropertyName 'gate_backstop_hours' -NotePropertyValue ([int]$script:BackstopHours) -Force
       Add-Member -InputObject $r -NotePropertyName 'gate_strict' -NotePropertyValue ([bool]$script:GateStrict) -Force
+      # #579: the value WITH its provenance, which is what makes "a configured value that is not
+      # applying is visible" true rather than intended. `default` here means the control was never
+      # configured -- a distinct fact from `settings`, and the one three live controls are in.
+      Add-Member -InputObject $r -NotePropertyName 'gate_backstop_source' -NotePropertyValue "$script:BackstopSource" -Force
+      Add-Member -InputObject $r -NotePropertyName 'gate_strict_source' -NotePropertyValue "$script:GateStrictSource" -Force
     }
   }
 
@@ -3252,7 +4497,117 @@ function Get-ScanRows {
 }
 
 function Cmd-Scan {
-  ConvertTo-Json -InputObject @(Get-ScanRows) -Depth 8
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $rows = @(Get-ScanRows)
+  $sw.Stop()
+  $seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
+
+  # FULL is still the default, so every existing caller, fixture and mutcheck keeps reading the
+  # exact JSON array it read before. `-Compact` and `-OutFile` are additive.
+  $full = ConvertTo-Json -InputObject $rows -Depth 8
+
+  if ($ScanOutFile) {
+    # The whole worklist to a FILE, a short summary to stdout (#711). This is the escape hatch
+    # for a caller that genuinely wants every field: a 507 KB tool result is not something an
+    # agent can read in one call, but a file is something it can grep.
+    $dir = Split-Path -Parent $ScanOutFile
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $payload = if ($Compact) { (New-CompactScan $rows $seconds | ConvertTo-Json -Depth 8) } else { $full }
+    [IO.File]::WriteAllText($ScanOutFile, $payload, (New-Object Text.UTF8Encoding($false)))
+    (New-ScanSummary $rows $seconds $ScanOutFile) | ConvertTo-Json -Depth 4
+    return
+  }
+
+  if ($Compact) { (New-CompactScan $rows $seconds) | ConvertTo-Json -Depth 8; return }
+  $full
+}
+
+function New-ScanSummary($rows, [double]$seconds, [string]$outFile) {
+  # The counts a caller needs to know the read SUCCEEDED, rather than inferring it from a
+  # payload it could not finish reading. `rows_total` being 0 is a different fact from an empty
+  # eligible list, and both used to be invisible behind half a megabyte of JSON.
+  $summary = [ordered]@{
+    scan_seconds   = $seconds
+    rows_total     = @($rows).Count
+    rows_eligible  = @($rows | Where-Object { $_.eligible }).Count
+    rows_reopened  = @($rows | Where-Object { $_.reopened }).Count
+    rows_unanswered = @($rows | Where-Object { $_.unanswered_user }).Count
+    rows_due_poll  = @($rows | Where-Object { $_.due_poll }).Count
+    rows_no_journal = @($rows | Where-Object { -not $_.has_journal }).Count
+    today_holding  = @($rows | Where-Object { $_.holds_today_gate }).Count
+    out_file       = if ($outFile) { $outFile } else { $null }
+  }
+  if ($script:ScanLanes) { $summary['lanes'] = [pscustomobject](New-LanesSummary $script:ScanLanes $rows) }
+  $summary
+}
+
+# The fields a run actually consumes to SELECT and DISPATCH work. Everything omitted is either
+# audit detail (`gate_backstop_source`, `exhaustion`, `ask_declared`) or a value the run can ask
+# for per task with `get -Id <id>` once it has picked one. Listed here, once, so the compact
+# contract is a thing you can read rather than something spread across a projection expression.
+$script:CompactFields = @(
+  'id', 'order', 'eligible', 'section', 'status', 'status_by', 'changed', 'reopened',
+  'reopened_closed', 'unanswered_user', 'unanswered_user_where', 'snoozed', 'snooze_until',
+  'due_poll', 'poll_cadence', 'due_recheck', 'recheck_kind', 'has_journal', 'has_agent_block',
+  'tracked', 'work_priority', 'urgency', 'board_pos', 'priorities_rank', 'linked',
+  'holds_today_gate', 'today_release_reason', 'has_open_ask', 'awaiting_reply', 'consent_ok',
+  'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
+  'session_activity', 'dispatch_skip_reason',
+  'session_process_dead', 'replacements_24h',
+  'session_workspace_missing',
+  'plan_review_due', 'dispatch_input', 'no_journal_reason',
+  'lane', 'lane_source', 'lane_from', 'lane_problem', 'lane_candidates', 'lane_served_here'
+)
+
+function Test-CompactRowNeeded($r) {
+  # WHICH ROWS SURVIVE, and why each arm is here rather than "just the eligible ones":
+  #
+  #   eligible           the work itself.
+  #   holds_today_gate   the rows EXPLAINING why the rest are ineligible. Dropping these would
+  #                      make a gated run unauditable -- "nothing was eligible" with no visible
+  #                      cause is the #346 shape on the primary worklist.
+  #   reopened_closed    must be REPORTED and never worked. Silently omitting it trades one
+  #                      silent failure for another (see "Reopened after close").
+  #   unanswered_user    a message from him that no turn has answered. It is re-reported every
+  #                      run on purpose; a compact mode that hid it would undo #501.
+  #   due_poll/recheck   time-triggered work that has come due.
+  #   no journal         #534: on the board with no journal file, so it needs one created.
+  #
+  # An ineligible, quiet, unchanged row is the case this mode exists to drop -- it is counted in
+  # the summary and nothing reads its fields.
+  #
+  # Lanes: a row another PC serves is that PC's business. It is counted in summary.lanes
+  # (rows_out_of_lane) and never listed here, whatever else is true of it.
+  if ($r.PSObject.Properties['lane_served_here'] -and -not $r.lane_served_here) { return $false }
+  if ($r.eligible) { return $true }
+  if ($r.dispatch_skip_reason) { return $true }
+  if ($r.plan_review_due) { return $true }
+  if ($r.holds_today_gate) { return $true }
+  if ($r.reopened_closed) { return $true }
+  if ($r.unanswered_user) { return $true }
+  if ($r.replacements_24h -gt 0) { return $true }
+  if ($r.due_poll -or $r.due_recheck) { return $true }
+  if ($r.PSObject.Properties['has_journal'] -and -not $r.has_journal) { return $true }
+  return $false
+}
+
+function New-CompactScan($rows, [double]$seconds) {
+  $kept = @()
+  foreach ($r in $rows) {
+    if (-not (Test-CompactRowNeeded $r)) { continue }
+    $o = [ordered]@{}
+    foreach ($f in $script:CompactFields) {
+      if ($r.PSObject.Properties[$f]) { $o[$f] = $r.$f }
+    }
+    $kept += [pscustomobject]$o
+  }
+  $summary = New-ScanSummary $rows $seconds $null
+  $summary['rows_returned'] = $kept.Count
+  # `omitted` is stated rather than left to be derived, because "this row is not here" and "this
+  # row does not exist" must not be the same observation -- the exact distinction #534 is about.
+  $summary['rows_omitted'] = (@($rows).Count - $kept.Count)
+  $summary['omitted_reason'] = 'ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist'
+  [ordered]@{ summary = [pscustomobject]$summary; rows = $kept }
 }
 
 function Cmd-Get {
@@ -3813,6 +5168,10 @@ function Get-DocCommentConsent {
   }
   $live = Join-Path $StateDir 'doc-comment-ledger.json'
   if (Test-Path -LiteralPath $live) { $ledgers += $live }
+  # The sent-messages ledger (.jsonl): a comment whose id the agent recorded as sent is the agent's,
+  # signature or not. doc-consent.mjs refuses when it exists but cannot be read in full.
+  $sent = Get-SentLedgerPath
+  if ($sent -and (Test-Path -LiteralPath $sent)) { $ledgers += $sent }
 
   try {
     $argv = @($script, $DumpPath, "$DocId") + $ledgers
@@ -3893,10 +5252,44 @@ function Cmd-Consent {
       # its own reader with its own mutation arms rather than an `if` bolted on here.
       $trailingHasUser = $false
       if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }
+      # --- #302: the consumer half, made mechanical -------------------------------------
+      #
+      # The short-circuit above is CORRECT and is not changed: a standing permission any stray
+      # sentence could cancel would not be standing. But `consent` answers "am I authorised?",
+      # never "should I?", and those come apart in exactly one place -- an agent that reads
+      # `gate-allowed` and merges over a FRESH human "don't" is technically authorised and
+      # obviously wrong.
+      #
+      # Until now the only thing between that transcript and a real merge was two sentences of
+      # prose in SKILL.md. This repository's reliability history is a list of rules that were
+      # written down and broken anyway (#272, #297, #301, and the five journal-corruption
+      # classes that became guards G1-G7 precisely because describing them did not hold). A
+      # guard that exists only as advice to a model is the same shape.
+      #
+      # So a gate allowance with unread human text below the last turn becomes its OWN verdict
+      # and reports `consent_ok: false`. Refusing is the safe direction and it is what makes
+      # this mechanical rather than advisory: a caller that ignores the new reason gets a plain
+      # `false` and stops, instead of proceeding on a `true` it was told to think twice about.
+      #
+      # THE FLOOR IS UNTOUCHED AND STILL OUTRANKS EVERYTHING. This only ever narrows an ALLOW;
+      # it can never turn a floor block into permission.
+      #
+      # NO REFUSAL VOCABULARY IS PARSED, which is this issue's explicit non-goal. The question
+      # answered is "has a human spoken since the last turn", not "what did they mean" -- the
+      # latter is #301's problem and needs its own reader and its own arms. `HasTrailingUser`
+      # is deliberately the fail-OPEN reader, so unattributed prose counts: a false "someone may
+      # be waiting" costs one pause, a false "nobody spoke" costs acting over a refusal.
+      #
+      # IT CLEARS ITSELF. Folding the human's message in -- answering it with a turn -- puts the
+      # newest turn below their text, so the next call returns a plain `gate-allowed`. The
+      # channel is "read what he said first", not a lock needing an override.
+      $humanSpoke = ($verdict.decision -eq 'allow') -and $trailingHasUser
       [pscustomobject]@{
         id                = $Id
-        consent_ok        = ($verdict.decision -eq 'allow')
-        reason            = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' } else { 'gate-allowed' })
+        consent_ok        = ($verdict.decision -eq 'allow') -and -not $humanSpoke
+        reason            = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' }
+                              elseif ($humanSpoke) { 'gate-allowed-human-spoke' }
+                              else { 'gate-allowed' })
         action            = "$Action"
         repo              = $(if ($Repo) { "$Repo" } else { $null })
         gate_state        = "$($gate.state)"
@@ -3938,8 +5331,13 @@ function Cmd-Consent {
   # FAIL CLOSED IN EVERY DIRECTION. `doc-consent.mjs` answers on stdout and returns 1 for "no
   # consent"; a missing node, a missing file, an unparsed dump or a crash all leave
   # `consent_ok` false. The one thing this must never do is treat an ABSENT answer as a yes.
+  # Where he can approve: a channel switched off in agent-gate.md's `## Approvals` never grants.
+  $approvals = Read-ApprovalChannels $GatePath
+  $appCh = $approvals['app']
+  $docCh = $approvals['google-doc']
+  $journalOk = [bool]$c.consent_ok -and $appCh.enabled
   $docConsent = $null
-  if ($DocComments -and -not $c.consent_ok) {
+  if ($DocComments -and -not $journalOk -and $docCh.enabled) {
     # The doc id comes from the JOURNAL stamp, not from stored state, for this command's own
     # stated reason: consent is a property of the journal as it stands right now. Reading the
     # binding out of state would let a field the agent writes choose which document is allowed
@@ -3950,8 +5348,8 @@ function Cmd-Consent {
 
   $out = [ordered]@{
     id                       = $facts.Id
-    consent_ok               = [bool]$c.consent_ok
-    reason                   = "$($c.reason)"
+    consent_ok               = $journalOk
+    reason                   = $(if ($c.consent_ok -and -not $appCh.enabled) { Get-ApprovalOffReason $appCh 'app' } else { "$($c.reason)" })
     human_segments           = [int]$c.human_segments
     affirmative_phrase       = $c.affirmative_phrase
     affirmative_author       = $c.affirmative_author
@@ -3971,7 +5369,9 @@ function Cmd-Consent {
   if ($DocComments) {
     $ok = [bool]($docConsent -and $docConsent.consent_ok)
     $out['doc_consent_ok'] = $ok
-    $out['doc_consent_reason'] = $(if ($docConsent) { "$($docConsent.reason)" } else { 'doc-consent-not-consulted' })
+    $out['doc_consent_reason'] = $(if ($docConsent) { "$($docConsent.reason)" }
+      elseif (-not $journalOk -and -not $docCh.enabled) { Get-ApprovalOffReason $docCh 'google-doc' }
+      else { 'doc-consent-not-consulted' })
     $out['doc_comments_path'] = "$DocComments"
     if ($ok) {
       $out['consent_ok'] = $true
@@ -4099,11 +5499,22 @@ function Add-TurnTerminator([string]$path) {
 # Accepts the stamp with or without the optional docUrl, and tolerates arbitrary inner spacing.
 $script:DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>\S+))?\s*-->'
 
-function Get-DocMetaFromJournal([string]$path) {
+function Get-DocMetaFromJournal([string]$path, [string]$content = $null) {
   # Read the self-healing stamp out of the journal. Fence-masked (#320) so a `doc-meta` shown
   # inside a fenced example in a turn is never mistaken for this task's real binding -- the same
   # rule the turn-end reader already applies, for the same reason.
-  $content = Read-JournalText $path
+  #
+  # `$content` is an optional pass-through of text the CALLER has already read from `$path`
+  # (#711). `scan` reads every journal once for its facts and was then re-reading each one here
+  # purely to find this stamp. It is an optimisation only: omitted OR EMPTY, the file is read
+  # exactly as before, and the stamp is parsed from the same bytes either way.
+  #
+  # Emptiness, not `$null`, is the test on purpose: a [string] parameter defaulted to `$null`
+  # arrives as `''`, so a `-eq $null` check here is always false and the fallback read would
+  # silently never happen -- which is exactly how the first version of this broke the
+  # journal-stamp rebind (caught by mutcheck-doc-binding). An empty journal re-read costs a
+  # stat and returns '', so the two paths agree.
+  if ([string]::IsNullOrEmpty($content)) { $content = Read-JournalText $path }
   if (-not $content) { return $null }
   $m = [regex]::Match((Get-FenceMaskedText $content), $script:DocMetaRe)
   if (-not $m.Success) { return $null }
@@ -4356,12 +5767,13 @@ function New-DocObject([string]$docId, [string]$docUrl, [string]$boundAt, $seen,
   }
 }
 
-function Get-DocState($st, [string]$path) {
+function Get-DocState($st, [string]$path, [string]$content = $null) {
   # Resolve the binding, state first, journal stamp as the self-healing fallback.
   # Returns @{ doc = <object|null>; source = 'state'|'journal'|'none'; healed = $bool }
+  # `$content` is the caller's already-read copy of `$path`, if it has one (#711).
   $doc = if ($st -and $st.PSObject.Properties['doc']) { $st.doc } else { $null }
   if ($doc -and "$($doc.doc_id)") { return @{ doc = $doc; source = 'state'; healed = $false } }
-  $stamp = Get-DocMetaFromJournal $path
+  $stamp = Get-DocMetaFromJournal $path $content
   if ($stamp) {
     # State was lost or never written, but the journal remembers. Rebind rather than create --
     # this is the exact case the issue's third acceptance criterion names.
@@ -4549,7 +5961,7 @@ function New-SessionObject {
   param(
     [string]$SessionIdValue, [string]$Kind, [string]$Project, [string]$Workspace,
     [string]$WsType, $CreatedAt, $LastWokenAt, [string]$SessionState,
-    [string]$PriorSessionId, $ReplacedAt
+    [string]$PriorSessionId, $ReplacedAt, [string[]]$PriorSessionIds
   )
   [pscustomobject]@{
     session_id       = $SessionIdValue
@@ -4570,8 +5982,29 @@ function New-SessionObject {
     # without it the replacement is indistinguishable from a first-ever session, which is the
     # cold start the whole binding exists to remove.
     prior_session_id = $PriorSessionId
+    # #562: the WHOLE lineage, oldest first, not just the immediate predecessor. A single slot
+    # cannot answer "has this id already been retired?" -- after 1 -> 2 -> 3 it remembers only 2,
+    # so a bind back onto 1 (or, as measured on task #471, back onto 2) looks like an ordinary
+    # replacement. Keeping the full chain is what makes the forward-only rule decidable at all.
+    prior_session_ids = @($PriorSessionIds | Where-Object { "$_" })
     replaced_at      = (ConvertTo-IsoText $ReplacedAt)
   }
+}
+
+function Get-SessionLineage($sess) {
+  # Every session id this task has already retired, oldest first. Records written before #562
+  # carry only `prior_session_id`; that single id is the lineage we can still prove, so it is
+  # used rather than treating the absent array as "no history" -- which would re-open the cycle
+  # on exactly the tasks that already have one.
+  if (-not $sess) { return @() }
+  $ids = @()
+  if ($sess.PSObject.Properties['prior_session_ids'] -and $sess.prior_session_ids) {
+    $ids += @($sess.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+  }
+  if ("$($sess.prior_session_id)" -and $ids -notcontains "$($sess.prior_session_id)") {
+    $ids += "$($sess.prior_session_id)"
+  }
+  return @($ids)
 }
 
 function Test-SamePath([string]$a, [string]$b) {
@@ -4586,11 +6019,185 @@ function Test-SamePath([string]$a, [string]$b) {
   return [string]::Equals($na, $nb, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Test-PathWithin([string]$path, [string]$root) {
+  if (-not $path -or -not $root) { return $false }
+  $full = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($path)).TrimEnd('\', '/')
+  $base = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($root)).TrimEnd('\', '/')
+  return [string]::Equals($full, $base, [StringComparison]::OrdinalIgnoreCase) -or
+    $full.StartsWith($base + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ChatWorkspace([string]$project, [string]$workspace, [string]$wsType) {
+  $settingsPath = Get-UserSettingsPath
+  $setting = if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
+    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project'
+  } else { '' }
+  if (-not $setting) {
+    throw 'session_chat_project_required: configure Non-code task project in user-settings.md before binding a non-code session'
+  }
+  $idPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+  $match = [regex]::Match($setting, "^($idPattern)(?=\s|$)")
+  $configured = if ($match.Success) { $match.Groups[1].Value } else { '' }
+  if ($configured -cnotmatch ('^' + $idPattern + '$')) {
+    throw "session_chat_project_invalid: Non-code task project must be a project id, got '$setting'"
+  }
+  if (-not $env:LOCALAPPDATA -and -not $env:OVERNIGHT_AGENT_HOME) {
+    throw 'session_chat_home_required: LOCALAPPDATA is required for Non-code task project'
+  }
+  $chatHome = if ($env:OVERNIGHT_AGENT_HOME) { Join-Path $env:OVERNIGHT_AGENT_HOME 'task-chats' }
+              else { Join-Path $env:LOCALAPPDATA 'overnight-agent\task-chats' }
+  if (-not $project -or $project -ne $configured -or -not $workspace -or $wsType -ne 'folder') {
+    throw 'session_chat_scope: bind the configured Non-code task project with its folder workspace (-SessionProject, -SessionWorkspace, -WorkspaceType folder)'
+  }
+  $oneDriveRoots = @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)
+  if ($env:USERPROFILE) { $oneDriveRoots += Join-Path $env:USERPROFILE 'OneDrive' }
+  foreach ($root in $oneDriveRoots) {
+    if ($root -and (Test-PathWithin $workspace $root)) {
+      throw 'session_chat_onedrive: Non-code task project must be outside OneDrive'
+    }
+  }
+  $folder = [IO.DirectoryInfo]::new([IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($workspace)))
+  while ($folder) {
+    if ($folder.Parent -and $folder.Parent.FullName -eq $env:USERPROFILE -and $folder.Name -like 'OneDrive*') {
+      throw 'session_chat_onedrive: Non-code task project must be outside OneDrive'
+    }
+    if (Test-Path -LiteralPath (Join-Path $folder.FullName '.git') -PathType Leaf) {
+      throw 'session_chat_worktree: Non-code task project cannot be inside a code worktree'
+    }
+    $folder = $folder.Parent
+  }
+  if (-not (Test-SamePath ([IO.Path]::GetFullPath($workspace)) ([IO.Path]::GetFullPath($chatHome)))) {
+    throw 'session_chat_home: Non-code task project must use %LOCALAPPDATA%\overnight-agent\task-chats'
+  }
+}
+
 function Get-SessionState($st) {
   if ($st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)") {
     return $st.session
   }
   return $null
+}
+
+function Get-Replacements24h($st) {
+  if (-not $st) { return 0 }
+  $events = @()
+  if ($st.PSObject.Properties['session_replacements'] -and $st.session_replacements) {
+    $events = @($st.session_replacements)
+  } elseif ($st.session -and "$($st.session.prior_session_id)" -and "$($st.session.replaced_at)") {
+    # Legacy records retained only the most recent replacement timestamp.
+    $events = @([pscustomobject]@{ at = $st.session.replaced_at })
+  }
+  $since = [datetimeoffset]::UtcNow.AddHours(-24)
+  $count = 0
+  foreach ($event in $events) {
+    $at = [datetimeoffset]::MinValue
+    if ([datetimeoffset]::TryParse("$($event.at)", [ref]$at) -and
+        $at.ToUniversalTime() -ge $since -and $at.ToUniversalTime() -le [datetimeoffset]::UtcNow) {
+      $count++
+    }
+  }
+  return $count
+}
+
+function Test-SessionProcessDead([string]$sessionId) {
+  # Is this bound session's CLI process gone? (GH #728)
+  #
+  # Measured 2026-09-28: task #228's session host (PID 18728) exited at 08:42 without a shutdown
+  # line, the binding still read `live`, and the 10:00 run spent its only dispatch slot on it.
+  # Derived at read time from the host's own `inuse.<pid>.lock` (the signal stuck-run-sweep and
+  # zero-writer-sweep already trust) AND a quiet events.jsonl, so a recycled PID or a host that is
+  # still writing cannot be read as dead. Any missing or unreadable evidence answers $false:
+  # replacing a live session discards its continuity, the expensive direction.
+  try { return [bool](Test-SessionProcessDeadCore $sessionId) } catch { return $false }
+}
+
+function Test-SessionProcessAlive([string]$sessionId) {
+  if (-not $sessionId -or $sessionId -match '[\\/]' -or $sessionId -in '.', '..') { return $false }
+  try {
+    $sessionDir = Join-Path $SessionStateDir $sessionId
+    if (-not (Test-Path -LiteralPath $sessionDir -PathType Container)) { return $false }
+    foreach ($lock in @(Get-ChildItem -LiteralPath $sessionDir -Filter 'inuse.*.lock' -File -ErrorAction Stop)) {
+      if ($lock.Name -notmatch '^inuse\.(\d+)\.lock$') { continue }
+      $pidValue = 0
+      if (-not [int]::TryParse($Matches[1], [ref]$pidValue) -or $pidValue -le 0) { continue }
+      $process = $null
+      try {
+        $process = [System.Diagnostics.Process]::GetProcessById($pidValue)
+        if (-not $process.HasExited) { return $true }
+      } catch [ArgumentException] {
+        # A missing lock owner is not positive evidence of a live host.
+      } finally {
+        if ($process) { $process.Dispose() }
+      }
+    }
+  } catch { return $false }
+  return $false
+}
+
+function Test-SessionProcessDeadCore([string]$sessionId) {
+  if (-not $sessionId -or $sessionId -match '[\\/]' -or $sessionId -in '.', '..') { return $false }
+  $sessionDir = Join-Path $SessionStateDir $sessionId
+  if (-not (Test-Path -LiteralPath $sessionDir -PathType Container)) { return $false }
+  $locks = @(Get-ChildItem -LiteralPath $sessionDir -Filter 'inuse.*.lock' -File -ErrorAction Stop)
+  if (-not $locks.Count) { return $false }
+
+  foreach ($lock in $locks) {
+    if ($lock.Name -notmatch '^inuse\.(\d+)\.lock$') { return $false }
+    $pidValue = 0
+    if (-not [int]::TryParse($Matches[1], [ref]$pidValue) -or $pidValue -le 0) { return $false }
+    $process = $null
+    try {
+      $process = [System.Diagnostics.Process]::GetProcessById($pidValue)
+      if (-not $process.HasExited) { return $false }
+    } catch [ArgumentException] {
+      # GetProcessById's not-found result is positive evidence that this lock's owner is gone.
+    } finally {
+      if ($process) { $process.Dispose() }
+    }
+  }
+
+  $eventsPath = Join-Path $sessionDir 'events.jsonl'
+  if (-not (Test-Path -LiteralPath $eventsPath -PathType Leaf)) { return $false }
+  $staleBefore = [datetime]::UtcNow.AddMinutes(-15)
+  if ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -gt $staleBefore) { return $false }
+  # A routine CLI shutdown is idle, not an unresumable session. Task #289's first host
+  # resumed after replacement, and its successor ended with session.shutdown/routine.
+  $lastEvent = Get-Content -LiteralPath $eventsPath -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  if ("$($lastEvent.type)" -eq 'session.shutdown' -and "$($lastEvent.data.shutdownType)" -eq 'routine') {
+    return $false
+  }
+  return $true
+}
+
+function Test-WorkspaceMissing([string]$path, [string]$wsType) {
+  # Is this code workspace GONE? (GH #717)
+  #
+  # Measured 2026-09-28: tasks #329 and #466 were bound to worktrees that had been deleted -- the
+  # directories did not exist at all -- and `session` still answered `reuse`/`live`. The run then
+  # spent a dispatch waking a session with no checkout. #452 only caught the half-torn-down shape
+  # (directory still present, `.git` gone); a clean `git worktree remove` leaves NOTHING behind,
+  # which read as "not created yet" and therefore as healthy.
+  #
+  # Derived at read time from `Test-Path` so it cannot go stale: no field records it, and the
+  # answer changes the instant the directory does.
+  #
+  # ⛔ Absence of evidence is still not evidence of absence. `Test-Path` answers $false for a path
+  # on a disconnected volume exactly as it does for a deleted one, so the CONTAINING ROOT is
+  # checked too: a missing path under a reachable root is gone; a path whose root we cannot even
+  # see is uninspectable and is never called missing.
+  if (-not $path) { return $false }
+  # A folder (chat) workspace is shared, long-lived and not created by us; it is out of scope
+  # here for the same reason it is out of scope for the checkout test below.
+  if ($wsType -and $wsType -ne 'worktree') { return $false }
+  try {
+    if (Test-Path -LiteralPath $path) { return $false }
+    $root = [System.IO.Path]::GetPathRoot($path)
+    if (-not $root) { return $false }
+    if (-not (Test-Path -LiteralPath $root)) { return $false }
+    return $true
+  } catch {
+    return $false
+  }
 }
 
 function Test-WorkspaceUsable([string]$path, [string]$wsType) {
@@ -4623,8 +6230,9 @@ function Test-WorkspaceUsable([string]$path, [string]$wsType) {
     # been created yet, which is exactly when a bind is being validated". This is also what makes
     # the function safe on an unreachable volume, where `Test-Path` answers $false for a
     # disconnected drive exactly as it does for a deleted directory -- the two are indistinguishable
-    # here, so neither is treated as evidence.
-    if (-not (Test-Path -LiteralPath $path)) { return $true }
+    # here, so neither is treated as evidence. #717 narrows that: a path missing UNDER A REACHABLE
+    # ROOT is a deleted worktree, not an uncreated one, and Test-WorkspaceMissing draws that line.
+    if (-not (Test-Path -LiteralPath $path)) { return (-not (Test-WorkspaceMissing $path $wsType)) }
     # `.git` in a worktree is a FILE (`gitdir: ...`), not a directory, so this must not test for a
     # container. Its absence beside a directory that STILL EXISTS is the measured signature of a
     # torn-down worktree: #466's workspace was present, empty, and deregistered.
@@ -4635,7 +6243,7 @@ function Test-WorkspaceUsable([string]$path, [string]$wsType) {
   }
 }
 
-function Get-SessionVerdict($sess, $row, $journalFacts) {
+function Get-SessionVerdict($sess, $row, $journalFacts, $sessionProcessDead = $null) {
   # The whole decision, in one place. `create` and `replace` both mean "make a new session", but
   # they are NOT the same instruction: `replace` carries a continuation the new session must be
   # told about, and collapsing them is how continuity is lost while the code still looks correct.
@@ -4665,6 +6273,13 @@ function Get-SessionVerdict($sess, $row, $journalFacts) {
   if (Test-UserPaused $row $journalFacts) { return 'paused' }
   if (-not $sess) { return 'create' }
   if ("$($sess.state)" -eq 'dead') { return 'replace' }
+  if ($null -eq $sessionProcessDead) {
+    $sessionProcessDead = Test-SessionProcessDead "$($sess.session_id)"
+  }
+  # #728: the binding can remain `live` after its CLI process exits. Require both its dead
+  # inuse PID and a quiet event log before replacing, so an incomplete/unreadable session record
+  # cannot discard a session that may still be writing.
+  if ($sessionProcessDead) { return 'replace' }
   # A live binding whose workspace no longer holds a checkout is `replace`, never `create` (#452).
   # The distinction is the whole point: this task HAS prior work, and `create` would cold-start it
   # -- losing exactly the continuity the binding exists to provide. `replace` re-creates the
@@ -4690,29 +6305,49 @@ function Get-DispatchInput($st, $facts) {
   finally { $sha.Dispose() }
 }
 
-function Get-RunLimit {
-  $buffer = Get-StartBufferSettings
-  [pscustomobject]@{
-    scope = 'run_local_concurrency'
-    dispatch_limit = [int]$script:ConcurrencyLimit
-    limit_source = "$script:ConcurrencySource"
-    # Retained for settings-reader compatibility, not a simultaneous-worker promise.
-    concurrency = [int]$script:ConcurrencyLimit
-    concurrency_source = "$script:ConcurrencySource"
-    start_buffer_minutes = $buffer.minutes
-    start_buffer_source = $buffer.source
-    start_buffer_error = $buffer.error
-    note = 'N outstanding requests from this run, refilled until next half-hour minus the configured start buffer. Earlier runs do not reserve openings. Use oa_drain_status for this run.'
-  }
-}
-
 function Assert-TaskDispatch($st, $sess, $facts) {
+  # Lanes first (docs/spec/Domain-lanes.md): a task another PC serves is not this PC's to wake,
+  # whatever else is true of it. A no-op when lanes are off.
+  Assert-LaneServed "$($st.id)"
+  if ($RequiresTools.Count) {
+    if (-not (Test-Path -LiteralPath $CapabilitiesPath)) {
+      throw 'session_capabilities_missing: run the critical-tool preflight before dispatch'
+    }
+    $capabilities = Get-Content -LiteralPath $CapabilitiesPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ($capabilities.schema -ne 'oa-capabilities/1' -or
+        ([datetime]::UtcNow - [datetime]::Parse([string]$capabilities.checkedAt).ToUniversalTime()).TotalMinutes -gt 60) {
+      throw 'session_capabilities_stale: rerun the critical-tool preflight'
+    }
+    foreach ($name in $RequiresTools) {
+      $tool = $capabilities.tools.PSObject.Properties[$name]
+      if (-not $tool) { throw "session_capability_unknown: '$name' was not probed" }
+      if ($tool.Value.status -ne 'ok') { throw "blocked: $name down" }
+    }
+  }
+  # #734: a pause is named, not folded into the generic refusal. `session_not_dispatchable` reads
+  # as "the binding needs attention" and invites a caller to fix the binding and try again, which
+  # is exactly the wrong move here -- so the refusal says WHO stopped this and uses the same token
+  # the wake-stamp guard throws.
+  if (Test-UserPaused $st $facts) {
+    throw ("session_user_paused: task $($st.id) was paused by the user (status $($st.status), " +
+      'status_by user). Do not dispatch it. Only he clears a pause: he replies in the journal ' +
+      'below the newest turn, or a run records his decision with `-StatusBy user`.')
+  }
   if ((Get-SessionVerdict $sess $st $facts) -ne 'reuse') {
     throw 'session_not_dispatchable: resolve the saved session first; paused tasks cannot be woken'
   }
+  if ($ForDispatch -and [string]::IsNullOrWhiteSpace($DispatchInput)) {
+    throw 'session_input_required: -ForDispatch requires the exact dispatch_input from scan'
+  }
   $row = @(Get-ScanRows | Where-Object { "$($_.id)" -eq "$($st.id)" }) | Select-Object -First 1
-  if (-not $row -or -not $row.eligible -or $row.session_paused) {
+  if ($row.dispatch_skip_reason) {
+    throw "$($row.dispatch_skip_reason): bound session $($sess.session_id) cannot be dispatched"
+  }
+  if (-not $row -or (-not $row.eligible -and -not ($PlanDispatch -and $row.plan_review_due)) -or $row.session_paused) {
     throw 'session_not_eligible: follow the current Today-first worklist and user pauses'
+  }
+  if ($PlanDispatch -and -not $row.plan_review_due) {
+    throw 'session_plan_not_reviewable: -PlanDispatch only applies to an agent-authored proposal'
   }
   if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {
     throw 'session_input_changed: the prepared task brief is stale'
@@ -4720,6 +6355,63 @@ function Assert-TaskDispatch($st, $sess, $facts) {
   if ($Force -and -not ($row.unanswered_user -or $row.doc_new_comments -gt 0)) {
     throw 'session_collect_evidence_required: fold the human reply or observe the human doc comment first'
   }
+  Assert-GatedPlanConsent $st $facts
+}
+
+# --- The floor, in code (#804) -------------------------------------------------------------
+# A `[gated]` plan step (write-turn's G19 classification: the step needs HIS consent) must never
+# reach a task session on anything less than the consent reader's own `consent_ok: true`.
+# Measured on the #810 e2e gate: a coordinator read `approved: yes, go ahead and place the order`
+# -- an UNATTRIBUTED line below a [gated] $899 purchase -- as approval, never called `consent`,
+# and dispatched the purchase. `-ForDispatch` stamped it, because dispatch authority never asked.
+# The rule existed only as prose, and prose is what the model skipped. So the stamp now asks.
+#
+# Scope is exactly the newest agent turn's numbered `[gated]` steps. A plan whose steps are all
+# `[reversible]` / `[gate-allowed]` is untouched, as is a turn with no classified plan. Consent is
+# the same fail-closed reader `consent` uses (journal, then -- only when it declines and the
+# caller passes -DocComments -- the catch-up doc), so the two can never disagree.
+$script:GatedStepRe = '(?m)^[ \t]*[1-9][0-9]*\.[ \t]+\[gated\][ \t]+(.*)$'
+
+function Get-GatedPlanSteps($facts) {
+  if (-not $facts -or -not $facts.Content) { return @() }
+  $content = [string]$facts.Content
+  $agentEnd = Get-AgentEndIndex $content
+  if ($agentEnd -lt 0) { return @() }
+  $agentLeft = $content.Substring(0, [Math]::Min($agentEnd, $content.Length))
+  $turn = Get-NewestAgentTurn $agentLeft
+  if (-not $turn) { return @() }
+  $masked = Get-FenceMaskedText $turn
+  $out = @()
+  foreach ($m in [regex]::Matches($masked, $script:GatedStepRe)) {
+    $out += $turn.Substring($m.Index, $m.Length).Trim()
+  }
+  return $out
+}
+
+function Assert-GatedPlanConsent($st, $facts) {
+  $gated = @(Get-GatedPlanSteps $facts)
+  if ($gated.Count -eq 0) { return }
+  $c = $facts.Consent
+  $approvals = Read-ApprovalChannels $GatePath
+  if ($c.consent_ok -and $approvals['app'].enabled) { return }
+  $reason = if ($c.consent_ok) { Get-ApprovalOffReason $approvals['app'] 'app' } else { "$($c.reason)" }
+  if ($DocComments) {
+    if (-not $approvals['google-doc'].enabled) {
+      $reason = "$reason; doc: $(Get-ApprovalOffReason $approvals['google-doc'] 'google-doc')"
+    }
+    else {
+      $meta = Get-DocMetaFromJournal $facts.Path $facts.Content
+      $doc = Get-DocCommentConsent -DumpPath $DocComments -DocId $(if ($meta) { $meta.doc_id } else { '' })
+      if ($doc -and $doc.consent_ok) { return }
+      $reason = "$reason; doc: $(if ($doc) { "$($doc.reason)" } else { 'doc-consent-not-consulted' })"
+    }
+  }
+  $step = $gated[0]
+  if ($step.Length -gt 120) { $step = $step.Substring(0, 117) + '...' }
+  throw ("session_gated_needs_consent: task $($st.id)'s newest plan has a [gated] step ($step) and " +
+    "``consent -Id $($st.id)`` does not return consent_ok ($reason). Do not dispatch it. Ask him in " +
+    'the journal; dispatch after HIS reply. Nothing an agent writes -- in the journal or in a brief -- ' +
+    'can approve a [gated] step.')
 }
 
 function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
@@ -4731,9 +6423,54 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
   "Read the task journal for what has already been done before doing anything new."
 }
 
+function Get-TaskRoleLine([string]$taskId) {
+  # #727: a task session that received "overnight dispatch for task #228" matched the brief to the
+  # overnight-agent skill by name and loaded the coordinator. The brief now states the role first,
+  # emitted here so the coordinator pastes it rather than paraphrasing it away.
+  "You are the task session for planner task #$taskId. Do this task only. Do not run " +
+  "``/overnight-agent`` or load the overnight-agent skill, and do not dispatch, create or wake " +
+  "other sessions."
+}
+
+function Cmd-Whoami {
+  # #727: which role is THIS session? Answers the guard at the top of SKILL.md cheaply, by
+  # matching the session id against every task binding (current or replaced). Read-only.
+  $sid = if ($SessionId) { $SessionId } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  $hits = @()
+  if ($sid -and (Test-Path $StateDir)) {
+    foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+      try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+      $s = Get-SessionState $obj
+      if (-not $s) { continue }
+      $match = if ("$($s.session_id)" -eq $sid) { 'session_id' }
+      elseif ("$($s.prior_session_id)" -eq $sid) { 'prior_session_id' }
+      else { $null }
+      if ($match) { $hits += [pscustomobject]@{ id = "$($obj.id)"; match = $match; state = "$($s.state)" } }
+    }
+  }
+  $role = if (-not $sid) { 'unknown' } elseif ($hits.Count) { 'task' } else { 'coordinator' }
+  $taskId = if ($hits.Count) { $hits[0].id } else { $null }
+  [pscustomobject]@{
+    session_id = if ($sid) { $sid } else { $null }
+    session_id_source = if ($SessionId) { 'parameter' } elseif ($sid) { 'COPILOT_AGENT_SESSION_ID' } else { $null }
+    # task | coordinator | unknown. `task` means: do only that task's work.
+    role       = $role
+    task_id    = $taskId
+    tasks      = @($hits)
+    role_line  = if ($taskId) { (Get-TaskRoleLine $taskId) } else { $null }
+  } | ConvertTo-Json -Depth 4
+}
+
 function Cmd-Session {
+  $agentModel = Get-AgentModelSettings
+  if ($ForDispatch -and -not $SessionsStatusFile) {
+    throw 'session_status_required: -ForDispatch requires a fresh get_sessions_status snapshot'
+  }
+  if ($PlanDispatch -and (-not $ForDispatch -or $Force)) {
+    throw 'session_plan_dispatch_flags: -PlanDispatch requires -ForDispatch and cannot use -Force'
+  }
   if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
-      ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $SessionWoken -or $WorkspaceGone)) {
+      ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $WorkspaceGone)) {
     throw 'session_dispatch_flags_conflict: use -Id with exactly one dispatch-check flag'
   }
   # ---- workspace teardown: `session -WorkspaceGone <path>`, no -Id -----------------------
@@ -4773,7 +6510,8 @@ function Cmd-Session {
         $newSess = New-SessionObject -SessionIdValue "$($s.session_id)" -Kind "$($s.kind)" `
           -Project "$($s.project)" -Workspace "$($s.workspace)" -WsType "$($s.workspace_type)" `
           -CreatedAt $s.created_at -LastWokenAt $s.last_woken_at -SessionState 'dead' `
-          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at
+          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at `
+          -PriorSessionIds (Get-SessionLineage $s)
         Set-Member $obj 'session' $newSess
         # Set-Member, not a direct assignment: a state object written by an older version (or a
         # hand-built one) may not carry `updated` at all, and assigning to an absent property
@@ -4794,10 +6532,8 @@ function Cmd-Session {
       } | ConvertTo-Json -Depth 4)
   }
 
-  # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
-    if (-not ($RunLimit -or $InFlight)) { throw 'session requires -Id (or -RunLimit, or -WorkspaceGone for teardown)' }
-    return (Get-RunLimit | ConvertTo-Json -Depth 4)
+    throw 'session requires -Id (or -WorkspaceGone for teardown)'
   }
 
   $st = Read-State $Id
@@ -4828,14 +6564,38 @@ function Cmd-Session {
   }
   elseif ($SessionDead) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to mark dead" }
+    # Silence is not death (#761). A confirmed live lock owner outranks a caller's inference
+    # from missing journal output or a delivery acknowledgement that could not be confirmed.
+    if (Test-SessionProcessAlive "$($sess.session_id)") {
+      throw "session_still_alive: task $Id has a live session host; do not replace it for silence"
+    }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt $sess.last_woken_at -SessionState 'dead' `
-      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at `
+      -PriorSessionIds (Get-SessionLineage $sess)
     $dirty = $true
   }
   elseif ($SessionId) {
+    Assert-LaneServed "$Id"
     $prior = ''
+    $lineage = @(Get-SessionLineage $sess)
+    if ($sess -and "$($sess.session_id)" -ne $SessionId -and $lineage -contains $SessionId) {
+      # #562: a bind may only move FORWARD. Measured on task #471: the chain ran
+      # b94abe44 -> 42d1a304 -> 9294bd58, and then the binding was written back onto 42d1a304
+      # with 9294bd58 recorded as its PRIOR -- the successor filed as the ancestor's predecessor.
+      # That is a cycle, not a chain: the newest session is orphaned, its slot stays charged, and
+      # the next `replace` can flip it straight back.
+      #
+      # Deliberately NOT overridable by -Force. -Force exists to escape a binding that is merely
+      # inconvenient; there is no state of the world in which re-binding an already-retired
+      # ancestor is the right answer, so an escape hatch here would only make the cycle reachable
+      # again. Recover by releasing the task (-SessionRelease) and binding a genuinely new session.
+      throw ("session_bind_backwards: task $Id already retired session $SessionId " +
+        "(lineage: $($lineage -join ' -> ')); refusing to re-bind it over $($sess.session_id). " +
+        'A replacement must be a session this task has never used. If the current binding is ' +
+        'genuinely finished, release it with -SessionRelease and bind a new session.')
+    }
     if ($sess -and "$($sess.session_id)" -ne $SessionId) {
       if ("$($sess.state)" -ne 'dead' -and -not $Force) {
         # The refusal that makes "reuse the persisted session" a rule rather than an intention.
@@ -4847,16 +6607,25 @@ function Cmd-Session {
           'cannot be woken, record that with -SessionDead first -- that is the replacement path, ' +
           'and it is what carries the continuation into the new session.')
       }
-      # Replacing a dead one: the prior id is the continuity record.
+      # Replacing a dead one: the prior id is the continuity record, and the outgoing id joins
+      # the lineage so it can never be re-bound to this task (#562).
       $prior = "$($sess.session_id)"
+      if ($lineage -notcontains $prior) { $lineage = @($lineage) + $prior }
     }
     elseif ($sess) { $prior = "$($sess.prior_session_id)" }
 
-    $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'folder' }
+    $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'chat' }
+    if ($kind -notin @('code', 'chat')) {
+      throw ("session_kind_invalid: '$kind' is not a supported task session kind; pass " +
+        '-SessionKind chat for a non-code task or -SessionKind code with its worktree')
+    }
     $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
-    $workspace = if ($SessionWorkspace) { $SessionWorkspace } elseif ($sess) { "$($sess.workspace)" } else { '' }
+    $workspace = if ($SessionWorkspace) { $SessionWorkspace }
+      elseif ($sess) { "$($sess.workspace)" }
+      else { '' }
     $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
-    elseif ($kind -eq 'code') { 'worktree' } else { 'folder' }
+    elseif ($kind -eq 'chat') { 'folder' } else { 'worktree' }
+    if ($kind -eq 'chat') { Assert-ChatWorkspace $project $workspace $wsType }
 
     if ($kind -eq 'code') {
       # A code task without a named project is the inheritance trap: every session API defaults
@@ -4883,25 +6652,38 @@ function Cmd-Session {
       }
     }
 
-    # Binding is identity, not admission. New/replacement sessions are created idle and sent
-    # their kickoff through oa_drain; charging a bind before that send recreates #589.
+    # Binding is identity, not dispatch. New and replacement sessions are created idle.
 
     $created = if ($sess -and "$($sess.session_id)" -eq $SessionId -and $sess.created_at) { $sess.created_at } else { Now-Iso }
     $replacedAt = if ($prior -and "$($sess.session_id)" -ne $SessionId) { Now-Iso } elseif ($sess) { $sess.replaced_at } else { '' }
+    if ($prior) {
+      $history = @()
+      if ($st.PSObject.Properties['session_replacements'] -and $st.session_replacements) {
+        $history = @($st.session_replacements)
+      } elseif ($sess -and "$($sess.prior_session_id)" -and "$($sess.replaced_at)") {
+        $history = @([pscustomobject]@{ session_id = "$($sess.prior_session_id)"; at = (ConvertTo-IsoText $sess.replaced_at) })
+      }
+      if ("$($sess.session_id)" -ne $SessionId) {
+        $history += [pscustomobject]@{ session_id = $prior; at = $replacedAt }
+        Set-Member $st 'session_replacements' $history
+      }
+    }
     $sess = New-SessionObject -SessionIdValue $SessionId -Kind $kind -Project $project `
       -Workspace $workspace -WsType $wsType -CreatedAt $created `
       -LastWokenAt $(if ($sess -and "$($sess.session_id)" -eq $SessionId) { $sess.last_woken_at } else { '' }) `
-      -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt
+      -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt `
+      -PriorSessionIds $lineage
     $dirty = $true
   }
 
-  if ($SessionWoken -or $ForDispatch) {
+  if ($ForDispatch) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to wake" }
     if (Test-UserPaused $st $pauseFacts) { throw 'session_user_paused: cannot stamp a wake for a paused task' }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt (Now-Iso) -SessionState 'live' `
-      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at `
+      -PriorSessionIds (Get-SessionLineage $sess)
     $dirty = $true
   }
 
@@ -4911,9 +6693,12 @@ function Cmd-Session {
     Write-State $st
   }
 
-  $verdict = Get-SessionVerdict $sess $st $pauseFacts
+  $sessionProcessDead = [bool](Test-SessionProcessDead "$($sess.session_id)")
+  $verdict = Get-SessionVerdict $sess $st $pauseFacts $sessionProcessDead
   [pscustomobject]@{
     id             = $Id
+    model          = $agentModel.model
+    model_source   = $agentModel.source
     bound          = [bool]$sess
     session_id     = if ($sess) { "$($sess.session_id)" } else { $null }
     # create | reuse | replace | paused. The run loop acts on THIS, not on `bound`.
@@ -4925,7 +6710,14 @@ function Cmd-Session {
     project        = if ($sess -and "$($sess.project)") { "$($sess.project)" } else { $null }
     workspace      = if ($sess -and "$($sess.workspace)") { "$($sess.workspace)" } else { $null }
     workspace_type = if ($sess) { "$($sess.workspace_type)" } else { $null }
+    # #717: why a bound code session reads `replace`. Derived from the filesystem on every call.
+    workspace_missing = [bool](Test-WorkspaceMissing "$($sess.workspace)" "$($sess.workspace_type)")
+    # #728: why a bound session reads `replace`. Derived from session-state on each call.
+    process_dead = $sessionProcessDead
     prior_session_id = if ($sess -and "$($sess.prior_session_id)") { "$($sess.prior_session_id)" } else { $null }
+    # #562: every id this task has retired, oldest first. Emitted so a caller can see WHY a bind
+    # was refused without opening the state file, and so the cycle is visible if one ever recurs.
+    prior_session_ids = @(Get-SessionLineage $sess)
     created_at     = if ($sess) { (ConvertTo-IsoText $sess.created_at) } else { $null }
     last_woken_at  = if ($sess -and $sess.last_woken_at) { (ConvertTo-IsoText $sess.last_woken_at) } else { $null }
     released       = [bool]$released
@@ -4938,8 +6730,10 @@ function Cmd-Session {
     # Tuesday?", which is the difference between waiting and being stuck. Null on a task paused
     # before this field shipped: an unknown age is reported as unknown, never as "not paused".
     paused_at      = if ($st -and $st.PSObject.Properties['paused_at'] -and $st.paused_at) { (ConvertTo-IsoText $st.paused_at) } else { $null }
+    # #727: the first line of every brief sent to this task's session, emitted verbatim.
+    role_line      = (Get-TaskRoleLine $Id)
     # Present ONLY on a `replace` verdict, and emitted ready to paste. See Get-KickoffContinuation.
-    kickoff_continuation = if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
+    kickoff_continuation =  if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
     # Emitted, never executed (#321): the raw `git worktree remove --force` deletes THROUGH a
     # node_modules junction, so the safe teardown is named here rather than performed here.
     teardown_command = if ($sess -and "$($sess.workspace_type)" -eq 'worktree' -and "$($sess.workspace)") {
@@ -4948,9 +6742,6 @@ function Cmd-Session {
     else { $null }
     concurrency    = [int]$script:ConcurrencyLimit
     concurrency_source = "$script:ConcurrencySource"
-    budget_scope   = 'run_local_concurrency'
-    dispatch_limit = [int]$script:ConcurrencyLimit
-    limit_source   = "$script:ConcurrencySource"
   } | ConvertTo-Json -Depth 8
 }
 
@@ -5074,29 +6865,38 @@ function Set-ExhaustionDeclaration {
   return ($st | ConvertTo-Json -Depth 6)
 }
 
+$script:ApprovedWorkStatus = @('in-progress', 'done', 'blocked')
+$script:UserPauseStatusForApprovedWorkGuard = @('proposed', 'blocked')
+function Test-TaskSessionOwnsStatusChange($State) {
+  $caller = if ($TurnBy) { $TurnBy } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  if (-not $caller -or -not $State -or -not $State.PSObject.Properties['session'] -or -not $State.session) { return $false }
+  $ids = @()
+  foreach ($k in @('session_id', 'prior_session_id')) {
+    if ($State.session.PSObject.Properties[$k] -and $State.session.$k) { $ids += "$($State.session.$k)" }
+  }
+  if ($State.session.PSObject.Properties['prior_session_ids'] -and $State.session.prior_session_ids) {
+    $ids += @($State.session.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+  }
+  foreach ($sid in $ids) {
+    if ([string]::Equals($sid, $caller, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+function Get-ApprovedWorkMarkError($State) {
+  $caller = if ($TurnBy) { $TurnBy } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { 'unknown' }
+  $bound = if ($State -and $State.PSObject.Properties['session'] -and $State.session -and
+      $State.session.PSObject.Properties['session_id'] -and $State.session.session_id) {
+    "$($State.session.session_id)"
+  } else { 'no bound task session' }
+  return ("approved_task_status_owned_by_task_session: task $Id has a pending human approval, " +
+    "but caller '$caller' is not the bound task session ($bound). The coordinator must dispatch it " +
+    "with ``oa-state.ps1 session -Id $Id -ForDispatch ...``; the task session owns approved work " +
+    'status changes (in-progress/done/blocked). Unknown callers fail closed.')
+}
+
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
-  # GH #532 -- `-SessionWoken` belongs to `session`, and `mark` must not accept it silently.
-  #
-  # `$SessionWoken` is declared in the SHARED param block, so PowerShell binds it for every
-  # subcommand, but it is read in exactly one place and that place is inside `Cmd-Session`.
-  # `mark -Id X -SessionWoken` therefore parsed, did nothing, and exited 0. Measured against a
-  # real state file: the stamp did not move and the caller was told it had.
-  #
-  # The cost is not the wasted call, it is that the failure is UNFALSIFIABLE afterwards. An empty
-  # `last_woken_at` on a live session could mean the dispatcher never stamped, or that it stamped
-  # with this call and was silently ignored -- and those two produce byte-identical state, so
-  # nothing can distinguish them after the fact. Five of the eight tasks holding live sessions
-  # were in exactly that state when this was written.
-  #
-  # Refusing is deliberately NOT the same as making `mark` stamp the field. Doing that would hand
-  # the turn author a second working lever to reset its own wake window, which is the bypass #514
-  # measured -- and G12 judges that author, so the field it reads must not be writable by the
-  # party being judged. Stamping at DISPATCH is correct; stamping as REMEDIATION is the defect.
-  # A silent no-op and a working lever are both wrong; failing loudly is the third option.
-  if ($SessionWoken) {
-    throw "-SessionWoken is not a mark flag: it is read only by ``session``. Use ``oa-state.ps1 session -Id $Id -SessionWoken``. Accepting it here would exit 0 without stamping last_woken_at, which is indistinguishable afterwards from never having called it at all (#532)."
-  }
   $path = Join-Path $JournalDir "task-$Id.md"
   if (-not (Test-Path $path)) { throw "no journal at $path" }
   # The exhaustion declaration (#310) branches out BEFORE anything below touches the journal or
@@ -5134,6 +6934,14 @@ function Cmd-Mark {
         'Only he clears a pause: either he replies in the journal below the newest turn, or a run ' +
         "records his decision with ``-StatusBy user``. Marking it as the agent would erase the " +
         'instruction as a side effect of reporting work he asked you to stop (#540).')
+    }
+    $statusLower = "$Status".ToLowerInvariant()
+    $storedStatus = "$($st.status)".ToLowerInvariant()
+    $storedStatusBy = "$($st.status_by)".ToLowerInvariant()
+    if ("$StatusBy".ToLowerInvariant() -ne 'user' -and $script:ApprovedWorkStatus -contains $statusLower -and
+        -not ($storedStatusBy -eq 'user' -and $script:UserPauseStatusForApprovedWorkGuard -contains $storedStatus) -and
+        $facts.Consent -and [bool]$facts.Consent.consent_ok -and -not (Test-TaskSessionOwnsStatusChange $st)) {
+      throw (Get-ApprovedWorkMarkError $st)
     }
     $wasPaused = (Test-UserPaused $st $facts)
     $st.status = $Status
@@ -5303,20 +7111,79 @@ function Cmd-Mark {
 # Task agents can still update state during a coordinator run. Serialize state read/modify/write
 # so their marks and doc observations cannot erase a binding. This is file integrity, not a
 # lock or reservation against starting work in another run.
-if (($CheckDispatch -or $ForDispatch -or $RunLimit) -and $Command -ne 'session') {
-  throw 'session_flag_command: dispatch checks and run-limit reads belong to the session command'
+#
+# SCOPE THE LOCK TO WHAT IT PROTECTS (#778). Every command used to take the state mutex, so a
+# PHASE 0 that (correctly) runs its steps at once -- `scan`, the capability record, Google Tasks,
+# the Telegram sync-down -- had `critical-tools` and `decisions` queue behind a 60-90 s scan of
+# the state store they never read. With a 10 s fail-fast that surfaced as `state_lock_timeout`
+# and cost the model a retry turn per collision. Neither command touches the state store:
+#
+#   critical-tools  reads user-settings.md and the MCP config. Nothing to serialize: NO LOCK.
+#   decisions       appends one line to the run ledger, a separate file with its own writers
+#                   (Node's check-critical-tools.mjs is one). It takes the SHORT LEDGER LOCK.
+#
+# Everything else genuinely reads/modifies/writes the state store and still takes the mutex --
+# but it now WAITS for it (see -LockWaitSeconds) instead of telling the caller to retry.
+if (($CheckDispatch -or $ForDispatch) -and $Command -ne 'session') {
+  throw 'session_flag_command: dispatch checks belong to the session command'
 }
-$lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
-if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }
-$sha = [Security.Cryptography.SHA256]::Create()
-try { $lockKey = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockPath)))).Replace('-', '') }
-finally { $sha.Dispose() }
-$mutex = New-Object Threading.Mutex($false, "oa-state-$lockKey")
+# The scan's own budget: a queued caller outlasts the longest legitimate holder rather than
+# reporting a false "still running" while that holder is halfway through normal work.
+$script:DefaultLockWaitSeconds = 180
+# Past this age, a lock FILE (not the mutex, which the OS releases when its holder dies) belongs
+# to a writer that was killed mid-write; it is reclaimed rather than left to wedge the ledger.
+$script:LockStaleSeconds = 300
+# NOT `$lockWaitSeconds`: PowerShell names are case-insensitive, so that local WAS the
+# -LockWaitSeconds parameter, and assigning the default to it first discarded both the flag and
+# OA_STATE_LOCK_WAIT_SECONDS (every wait was 180 s). oa-state.mjs always honoured them.
+$stateLockWait = $script:DefaultLockWaitSeconds
+if ($LockWaitSeconds -gt 0) { $stateLockWait = $LockWaitSeconds }
+elseif ($env:OA_STATE_LOCK_WAIT_SECONDS) {
+  $parsedWait = 0
+  if ([int]::TryParse("$env:OA_STATE_LOCK_WAIT_SECONDS", [ref]$parsedWait) -and $parsedWait -gt 0) {
+    $stateLockWait = $parsedWait
+  }
+}
+if ($env:OA_SANDBOX_ROOT) {
+  foreach ($pair in @(
+      @('JournalDir', $JournalDir), @('StateDir', $StateDir), @('SessionStateDir', $SessionStateDir),
+      @('PlannerBoard', $PlannerBoard), @('PlannerCompleted', $PlannerCompleted),
+      @('SnoozeStore', $SnoozeStore), @('GatePath', $GatePath), @('RunLedger', $RunLedger),
+      @('CapabilitiesPath', $CapabilitiesPath), @('McpConfig', $McpConfig),
+      @('UserSettings', (Get-UserSettingsPath)), @('ScanOutFile', $ScanOutFile), @('ScanFile', $ScanFile),
+      @('Observe', $Observe), @('DocComments', $DocComments), @('SessionsStatusFile', $SessionsStatusFile),
+      @('SessionWorkspace', $SessionWorkspace), @('WorkspaceGone', $WorkspaceGone),
+      @('RunWorkspace', $RunWorkspace))) {
+    Assert-OaSandboxPath $pair[1] $pair[0]
+  }
+}
+$needsStateLock = @('critical-tools', 'decisions') -notcontains $Command
+$mutex = $null
 $locked = $false
+$ledgerLock = $null
+$stateFileLock = $null
+$stateFileLockPath = $null
 try {
-  try { $locked = $mutex.WaitOne(10000) }
-  catch [Threading.AbandonedMutexException] { $locked = $true }
-  if (-not $locked) { throw 'state_lock_timeout: another state operation is still running; retry rather than bypassing admission' }
+  if ($needsStateLock) {
+    $lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
+    if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $lockKey = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockPath)))).Replace('-', '') }
+    finally { $sha.Dispose() }
+    $stateLockTimeout = "state_lock_timeout: another state operation held the lock for the whole $stateLockWait s wait; it is stuck, not merely busy"
+    $stateFileLockPath = Get-OaStateLockFilePath $lockKey
+    $stateFileLock = Enter-OaStateFileLock $stateFileLockPath $stateLockWait
+    if (-not $stateFileLock) { throw $stateLockTimeout }
+    $mutex = New-Object Threading.Mutex($false, "oa-state-$lockKey")
+    try { $locked = $mutex.WaitOne($stateLockWait * 1000) }
+    catch [Threading.AbandonedMutexException] { $locked = $true }
+    if (-not $locked) {
+      throw $stateLockTimeout
+    }
+  }
+  elseif ($Command -eq 'decisions') {
+    $ledgerLock = Enter-OaFileLock $RunLedger $stateLockWait 'ledger_lock_timeout'
+  }
   Resolve-GateSettings
   Resolve-PacingSettings
   switch ($Command) {
@@ -5330,9 +7197,14 @@ try {
     'extract' { Cmd-Extract }
     'doc' { Cmd-Doc }
     'session' { Cmd-Session }
+    'whoami' { Cmd-Whoami }
+    'critical-tools' { Cmd-CriticalTools }
+    'decisions' { Cmd-Decisions }
   }
 }
 finally {
+  if ($ledgerLock) { Exit-OaFileLock $ledgerLock $RunLedger }
   if ($locked) { $mutex.ReleaseMutex() }
-  $mutex.Dispose()
+  if ($mutex) { $mutex.Dispose() }
+  Exit-OaStateFileLock $stateFileLock $stateFileLockPath
 }

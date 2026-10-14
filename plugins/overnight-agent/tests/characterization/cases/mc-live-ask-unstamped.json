@@ -1,0 +1,17 @@
+{
+  "fixture": "mc-live-ask-unstamped",
+  "covers": [
+    "mutcheck-live-ask-unstamped"
+  ],
+  "cases": [
+    {
+      "id": "mc/live-ask-unstamped/scan-unstamped-recovered",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "Compact": true
+      },
+      "note": "scan recovers the newest ask from an unstamped moon-heading turn with a suffix."
+    }
+  ]
+}

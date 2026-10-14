@@ -44,6 +44,9 @@ if (-not $ScriptPath) {
   $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
   $ScriptPath = Join-Path $here 'oa-state.ps1'
 }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 # Launch the host that actually EXISTS here. `powershell` is Windows-only, so hardcoding it makes
 # the guard die on the Linux runner with "The term 'powershell' is not recognized" -- which is how
@@ -93,11 +96,11 @@ foreach ($id in 801, 802, 803, 804) { $boardText += "| $id | synthetic |`n" }
 
 function Invoke-Oa {
   param([string[]]$OaArgs)
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
+  $all = $script:OaCmd.Prefix + $OaArgs +
     @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  $out = & $script:PsExe @all 2>&1 | Out-String -Width 4096
+  $out = & $script:OaCmd.Exe @all 2>&1 | Out-String -Width 4096
   $ErrorActionPreference = $prev
   return $out
 }

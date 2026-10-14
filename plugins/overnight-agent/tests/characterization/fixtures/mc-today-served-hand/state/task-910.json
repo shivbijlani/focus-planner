@@ -1,0 +1,22 @@
+{
+  "id": "910",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t910-v1",
+  "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "{{NOW-20m}}",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "{{NOW-20m}}",
+  "last_turn_by": "sess-coordinator",
+  "today_exhausted": {
+    "at": "{{NOW-5m}}",
+    "examined": [
+      "gh:197"
+    ],
+    "note": "",
+    "today_hash": "299cfab34ba0ae3de1d04fed90e370d91be4895d801251ba1fae2b4d3ed3120a"
+  }
+}

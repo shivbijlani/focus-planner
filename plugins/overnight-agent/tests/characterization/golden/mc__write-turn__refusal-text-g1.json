@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "mc/write-turn/refusal-text-g1",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G1 line 7: looks like a value was eaten by PowerShell string interpolation (a `$` expanded to nothing)",
+        "      | The quote landed around ~\\-275 all in."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

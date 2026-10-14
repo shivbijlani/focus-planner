@@ -1,0 +1,103 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-declared-ask"
+  ],
+  "cases": [
+    {
+      "id": "mc/declared-ask-write/missing-ask-refused",
+      "tool": "write-turn",
+      "args": {
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "G13 refuses a turn that omits -Ask."
+    },
+    {
+      "id": "mc/declared-ask-write/bad-value-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "maybe",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "G13 refuses an unknown -Ask value."
+    },
+    {
+      "id": "mc/declared-ask-write/handwritten-stamp-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "offer",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n\n<!-- oa-ask: blocking -->\n",
+      "note": "G13 refuses a hand-written oa-ask stamp."
+    },
+    {
+      "id": "mc/declared-ask-write/stamps-blocking",
+      "files": {
+        "data/journal/task-960.md": "# Task 960: Fixture\n\nUser notes.\n"
+      },
+      "note": "A clean append stamps oa-ask: blocking beneath provenance.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "960",
+            "Ask": "blocking"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply `go` if you want me to continue.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/declared-ask-write/stamps-offer",
+      "files": {
+        "data/journal/task-961.md": "# Task 961: Fixture\n\nUser notes.\n"
+      },
+      "note": "A clean append stamps oa-ask: offer beneath provenance.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "961",
+            "Ask": "offer"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply `go` if you want me to continue.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/declared-ask-write/stamps-none",
+      "files": {
+        "data/journal/task-962.md": "# Task 962: Fixture\n\nUser notes.\n"
+      },
+      "note": "A clean append stamps oa-ask: none beneath provenance.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "962",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    }
+  ]
+}

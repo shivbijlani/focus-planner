@@ -1,0 +1,74 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-consent-vocab-drift"
+  ],
+  "cases": [
+    {
+      "id": "mc/consent-vocab-drift/send-it-accepted",
+      "files": {
+        "data/journal/task-920.md": "# Task 920: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nsend it\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "920"
+      }
+    },
+    {
+      "id": "mc/consent-vocab-drift/make-it-so-accepted",
+      "files": {
+        "data/journal/task-921.md": "# Task 921: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nmake it so\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "921"
+      }
+    },
+    {
+      "id": "mc/consent-vocab-drift/proceed-accepted",
+      "files": {
+        "data/journal/task-922.md": "# Task 922: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nproceed\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "922"
+      }
+    },
+    {
+      "id": "mc/consent-vocab-drift/vibe-it-accepted",
+      "files": {
+        "data/journal/task-923.md": "# Task 923: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nvibe it\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "923"
+      }
+    },
+    {
+      "id": "mc/consent-vocab-drift/merge-number-accepted",
+      "files": {
+        "data/journal/task-924.md": "# Task 924: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nmerge 300\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "924"
+      }
+    },
+    {
+      "id": "mc/consent-vocab-drift/merge-it-later-rejected",
+      "files": {
+        "data/journal/task-925.md": "# Task 925: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nmerge it later\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "925"
+      }
+    }
+  ]
+}

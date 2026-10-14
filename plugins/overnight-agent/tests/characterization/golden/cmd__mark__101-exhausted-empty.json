@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "cmd/mark/101-exhausted-empty",
+  "steps": [
+    {
+      "args": {
+        "Exhausted": " , ",
+        "Id": "101"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "-Exhausted must name what was examined (e.g. -Exhausted 'gh:197,gh:179,gh:139'); an unnamed declaration asserts nothing"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

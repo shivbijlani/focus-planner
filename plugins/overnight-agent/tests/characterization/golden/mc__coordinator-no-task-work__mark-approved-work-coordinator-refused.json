@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/coordinator-no-task-work/mark-approved-work-coordinator-refused",
+  "steps": [
+    {
+      "args": {
+        "Id": "975",
+        "Status": "in-progress",
+        "TurnBy": "coordinator-session"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "approved_task_status_owned_by_task_session: task 975 has a pending human approval, but caller 'coordinator-session' is not the bound task session (task-session-975). The coordinator must dispatch it with `oa-state.ps1 session -Id 975 -ForDispatch ...`; the task session owns approved work status changes (in-progress/done/blocked). Unknown callers fail closed."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

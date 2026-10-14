@@ -209,10 +209,8 @@ That means React comes **after** the file grammars and the service layers. Rebui
 npx vitest run \
   src/AgentGateEditor.test.jsx \
   src/SkillsSection.test.jsx \
-  src/combinedRouting.test.js \
   src/fileTreeEqual.test.js \
   src/linkedNav.test.js \
-  src/moveTask.test.js \
   src/selfHealIds.test.js \
   src/skillsSection.test.js
 npm run build

@@ -1,0 +1,98 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-pointer-turn"
+  ],
+  "cases": [
+    {
+      "id": "mc/pointer-turn/short-pointer-passes",
+      "tool": "write-turn",
+      "args": {
+        "Id": "940",
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-940.md": "# Task 940: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n<!-- doc-meta docId=DOC1234567890abcdefghijklmnopqrstuvwxyz docUrl=https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — doc pointer\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n📄 **[Catch-up doc](https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit)** — current state.\n\nUpdated the doc and left the journal as a pointer.\n\n**Needs from you:** approve the packet, or say what to change.\n",
+      "note": "Doc-bound short pointer with doc link and ask passes."
+    },
+    {
+      "id": "mc/pointer-turn/narrative-refused-g9",
+      "tool": "write-turn",
+      "args": {
+        "Id": "940",
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-940.md": "# Task 940: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n<!-- doc-meta docId=DOC1234567890abcdefghijklmnopqrstuvwxyz docUrl=https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — doc pointer\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n📄 **[Catch-up doc](https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit)** — current state.\n\nNarrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document.\n\n**Needs from you:** approve the packet, or say what to change.\n",
+      "note": "Doc-bound long narrative is refused by G9."
+    },
+    {
+      "id": "mc/pointer-turn/docless-long-accepted",
+      "tool": "write-turn",
+      "args": {
+        "Id": "941",
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-941.md": "# Task 941: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — doc pointer\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n📄 **[Catch-up doc](https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit)** — current state.\n\nNarrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document. Narrative detail that belongs in the catch-up document.\n\n**Needs from you:** approve the packet, or say what to change.\n",
+      "note": "The same long narrative is accepted when the task has no doc-meta binding."
+    },
+    {
+      "id": "mc/pointer-turn/no-doc-link-refused-g10",
+      "tool": "write-turn",
+      "args": {
+        "Id": "940",
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-940.md": "# Task 940: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n<!-- doc-meta docId=DOC1234567890abcdefghijklmnopqrstuvwxyz docUrl=https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — doc pointer\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\nUpdated the doc and left the journal as a pointer.\n\n**Needs from you:** approve the packet, or say what to change.\n",
+      "note": "A doc-bound pointer that never names the doc is refused by G10."
+    },
+    {
+      "id": "mc/pointer-turn/no-ask-refused-g11",
+      "tool": "write-turn",
+      "args": {
+        "Id": "940",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-940.md": "# Task 940: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n<!-- doc-meta docId=DOC1234567890abcdefghijklmnopqrstuvwxyz docUrl=https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — doc pointer\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n📄 **[Catch-up doc](https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit)** — current state.\n\nUpdated the doc and left the journal as a pointer.\n\n",
+      "note": "A doc-bound pointer with no journal ask is refused by G11."
+    },
+    {
+      "id": "mc/pointer-turn/fenced-doc-meta-real-binding-wins",
+      "tool": "write-turn",
+      "args": {
+        "Id": "942",
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-942.md": "# Task 942: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n```markdown\n<!-- doc-meta docId=QUOTEDnotREAL -->\n```\n\n<!-- doc-meta docId=DOC1234567890abcdefghijklmnopqrstuvwxyz docUrl=https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — doc pointer\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n📄 **[Catch-up doc](https://docs.google.com/document/d/DOC1234567890abcdefghijklmnopqrstuvwxyz/edit)** — current state.\n\nUpdated the doc and left the journal as a pointer.\n\n**Needs from you:** approve the packet, or say what to change.\n",
+      "note": "A fenced doc-meta example is ignored; the real binding wins."
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "files": {},
+  "id": "mc/workspace-verdict/deleted-worktree-replace",
+  "steps": [
+    {
+      "args": {
+        "Id": "973"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "973",
+        "kickoff_continuation": "This session continues work on planner task #973. The previous session for this task (S-973) could not be woken, so this one replaces it -- you are not starting from scratch. Read the task journal for what has already been done before doing anything new.",
+        "kind": "code",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #973. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "S-973",
+        "state": "live",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/deleted\"",
+        "verdict": "replace",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/deleted",
+        "workspace_missing": true,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "fixture": "mc-doc-channel-provenance",
+  "covers": [
+    "mutcheck-doc-channel-provenance"
+  ],
+  "cases": [
+    {
+      "id": "mc/doc-channel-provenance/scan-distinguishes-unread-fresh-stale",
+      "note": "scan rows distinguish never-observed, fresh, stale, and unbound doc channels even when doc_new_comments is 0 for several rows.",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/doc-channel-provenance/freshness-threshold-env-overrides",
+      "note": "OA_DOC_FRESH_MINUTES controls the freshness boundary; a 30-minute observation becomes stale under a 10-minute threshold.",
+      "env": {
+        "OA_DOC_FRESH_MINUTES": "10"
+      },
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/doc-channel-provenance/unparseable-observed-at-is-unread",
+      "note": "An unparseable observed_at value is treated as unread, not fresh.",
+      "files": {
+        "state/task-921.json": {
+          "id": "921",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t921-v1",
+          "processed_file_hash": "manual",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-01-01T12:00:00Z",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "2020-01-01T12:00:00Z",
+          "last_turn_by": "sess-char",
+          "doc": {
+            "doc_id": "DOC921",
+            "doc_url": "https://docs.google.com/document/d/DOC921/edit",
+            "bound_at": "2020-01-01T12:00:00Z",
+            "seen_ids": [],
+            "pending_ids": [],
+            "observed_at": "not-a-timestamp"
+          }
+        }
+      },
+      "tool": "oa-state",
+      "command": "scan"
+    }
+  ]
+}

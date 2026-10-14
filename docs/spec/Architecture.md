@@ -10,6 +10,14 @@ overnight autonomous agent — is a reader or writer of that folder, never an ow
 folder does not already hold. This is the design decision the rest of the system follows from:
 state lives in files a human can open and edit by hand, not behind an API only the app understands.
 
+Deployment-specific choices are kept at build-time seams instead of branching the shared app. The
+deployment profile configures branding, the planner root, install UX, sync scheduling, and the
+ordered list of allowed storage providers. The default host provider supplies a no-op consumer
+context, while the storage registry connects allowed provider types to implementation factories.
+Another deployment can replace the profile, host provider, and provider bootstrap through Vite
+aliases without editing shared application components; shared core code uses the registry rather
+than importing concrete provider implementations.
+
 ## The domains
 
 > [!NOTE]
@@ -21,9 +29,9 @@ state lives in files a human can open and edit by hand, not behind an API only t
 | Domain | Principal modules | Responsibility |
 | --- | --- | --- |
 | `app` | `src/App.jsx`, `src/focusPlanOps.js`, `src/journalChat.js`, `src/boardRow.js`, `src/journalLoadQueue.js` | The React board UI, the pure content-transformation functions over `planner.md`, and journal chat-thread rendering. |
-| `storage` | `src/storage/storage.js`, `src/storage/sources.js`, `src/storage/taskSettings.js`, `src/storage/fsa.js`, `src/storage/indexeddb-provider.js`, `src/storage/onedrive-provider.js`, `src/storage/google-drive-provider.js` | The provider-agnostic read/write abstraction over FSA, OneDrive, Google Drive and IndexedDB, plus a multi-source registry and per-task settings sidecars. |
+| `storage` | `src/storage/storage.js`, `src/storage/sources.js`, `src/storage/registry.js`, `src/storage/registerBuiltinProviders.js`, `src/storage/taskSettings.js`, `src/storage/fsa.js`, `src/storage/indexeddb-provider.js`, `src/storage/onedrive-provider.js`, `src/storage/google-drive-provider.js` | The profile-filtered provider registry and provider-agnostic read/write abstraction, plus saved provider choices, one active board source, and per-task settings sidecars. |
 | `folder-sync` | `packages/folder-sync/src/engine.js`, `packages/folder-sync/src/merge.js`, `packages/folder-sync/src/records.js`, `packages/folder-sync/src/sw.js`, `packages/folder-sync/src/queue.js` | The record-level sync engine (running in a service worker) that reconciles a local replica against a cloud provider without losing concurrent edits or resurrecting deleted rows. |
-| `config` | `src/config/agentGate.js`, `src/config/agentsDoc.js`, `src/config/aiSettings.js`, `src/config/userSettingsForm.js`, `src/config/agentSettingsVisibility.js`, `src/config/branding.js` | Schemas and editors for the config sidecars the overnight agent and the app both depend on. |
+| `config` | `src/config/profile.js`, `src/config/agentGate.js`, `src/config/agentsDoc.js`, `src/config/aiSettings.js`, `src/config/userSettingsForm.js`, `src/config/agentSettingsVisibility.js`, `src/config/branding.js` | Deployment profile, schemas, and editors for the config sidecars the overnight agent and the app both depend on. |
 | `task-paper` | `packages/task-paper/src/paper.js`, `packages/task-paper/src/render.js`, `packages/task-paper/src/markdown.js`, `packages/task-paper/src/generate.js`, `packages/task-paper/src/comment.js` | Renders a chronological journal into a settled, printable markdown/HTML artifact, with a comment channel back into the journal. |
 | `telegram-bridge` | `packages/telegram-bridge/src/bridge.js`, `packages/telegram-bridge/src/digest.js`, `packages/telegram-bridge/src/state.js`, `packages/telegram-bridge/src/liveStatus.js` | A standalone Node CLI mirroring task journals into a Telegram forum and folding replies back in, with a consolidated approval digest. |
 | `overnight-agent` | `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`, `.../SKILL.md`, plus 174 `plugins/overnight-agent/checks/*.mjs` scripts | A scheduled, unattended Copilot CLI plugin that scans the board, proposes and executes plans, and mutation-tests its own reliability. See [Domain-overnight-agent](Domain-overnight-agent), [Prioritisation](Prioritisation) and [Reliability](Reliability). |
@@ -71,8 +79,8 @@ Take "the user completes a task from the board":
    `opAppendToCompleted`, `opRemoveTaskFromFocusPlan`), which are pure `(content, ...args) ->
    newContent` transforms over the in-memory string of `planner.md` and
    `planner-completed.md`. No I/O happens inside these functions — this is exactly what lets the
-   single-source `FocusPlanView` and the multi-source Combined view reuse the identical algorithm,
-   each routing an operation to whichever source the row belongs to.
+   `FocusPlanView` applies the same storage-independent board transformation regardless of which
+   single provider is active.
 2. **Storage** — the new content is handed to `src/storage/storage.js`'s `write`, which delegates to
    whichever provider is active (`getActiveProvider()`), and for FSA/OneDrive/Google Drive providers
    the change is queued for the sync engine rather than written straight to the remote.

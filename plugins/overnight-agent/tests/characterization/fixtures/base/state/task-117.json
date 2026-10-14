@@ -1,0 +1,20 @@
+{
+  "id": "117",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t117-v1",
+  "processed_file_hash": "97a59078b2a07979f35cbf37572f340d4010a5199654eb249cc5a428b85cf195",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator",
+  "poll": {
+    "cadence": "daily",
+    "interval_minutes": 1440,
+    "last_polled": "2020-03-01T12:00:00Z",
+    "next_due": "2020-03-02T12:00:00Z"
+  }
+}

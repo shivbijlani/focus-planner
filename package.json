@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": ["packages/docs-core", "packages/docs-publisher"],
   "scripts": {
     "predev": "node scripts/copy-sw.mjs",
     "dev": "vite",
@@ -15,6 +16,7 @@
     "check:node-modules": "node scripts/check-node-modules.mjs",
     "pretest": "node scripts/check-node-modules.mjs",
     "test": "vitest run",
+    "test:smoke": "playwright test",
     "merge-queue": "node scripts/merge-queue.mjs",
     "preview": "vite preview"
   },
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.63.0",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",

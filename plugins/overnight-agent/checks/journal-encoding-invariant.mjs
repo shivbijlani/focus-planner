@@ -172,6 +172,52 @@ try {
   const ansiReads = (src.match(/Get-Content\s+-Raw\s+-Path\s+\$path/g) || []).length;
   const hasUtf8Decoder = /function\s+Read-JournalText/.test(src);
 
+  // DOES THE DECODER ACTUALLY DECODE AS UTF-8? (GH #602)
+  //
+  // Checking that `Read-JournalText` EXISTS is a check on the call shape, not on the
+  // behaviour. Measured: mutating its body from
+  //   [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+  // to
+  //   [IO.File]::ReadAllText($path, [Text.Encoding]::Default)
+  // leaves the function present and named, so the old test passed while every journal
+  // read decoded as ANSI -- which is #549 exactly: em-dashes, curly quotes, emoji and
+  // accented names silently double-encoded on the surface Shiv reads.
+  //
+  // That is this suite's own defect class arriving inside the guard: a check that cannot
+  // see the thing it claims to guard is indistinguishable from one that looked and found
+  // nothing. M2 has been surviving on main, so the sweep has been reporting 2/3 while
+  // advertising that it covers the decode path.
+  //
+  // WHAT IS ASSERTED, AND WHY THIS SHAPE. The decoder must name a UTF8Encoding, and must
+  // NOT name an ANSI/Default/ASCII/Unicode encoding anywhere in its body. Both halves are
+  // needed: requiring UTF8 alone would pass a body that reads UTF-8 once and ANSI
+  // elsewhere, and forbidding Default alone would pass a decoder that names no encoding
+  // at all -- which is the .NET default of UTF-8-with-BOM-detection, correct today but by
+  // accident rather than by statement.
+  //
+  // Deliberately scoped to the FUNCTION BODY, not the whole file: `[Text.Encoding]::Default`
+  // is legitimate elsewhere (the planner board is not a journal), and a file-wide ban would
+  // fire on unrelated code until someone switched the check off.
+  let decoderDecodesUtf8 = false;
+  let decoderNamesAnsi = false;
+  if (hasUtf8Decoder) {
+    // From the function header to the next top-level `function ` at column 0. Good enough
+    // for a guard and immune to brace-counting mistakes on a 5,000-line script.
+    const start = src.search(/function\s+Read-JournalText/);
+    const rest = src.slice(start + 1);
+    const nextFn = rest.search(/\r?\nfunction\s+[A-Za-z]/);
+    const whole = nextFn === -1 ? rest : rest.slice(0, nextFn);
+    // COMMENTS STRIPPED FIRST, and this is the difference between a guard and a
+    // spell-checker. This function's comment block explains at length why journals must be
+    // decoded as UTF-8 -- so matching the raw body finds "UTF8" in the PROSE and reports a
+    // healthy decoder no matter what the code does. Measured while building this: the ANSI
+    // mutation applied cleanly and the body still "named UTF8", because the explanation of
+    // the rule survived the removal of the rule.
+    const body = whole.replace(/#[^\r\n]*/g, '');
+    decoderDecodesUtf8 = /UTF8Encoding|\[Text\.Encoding\]::UTF8/.test(body);
+    decoderNamesAnsi = /\[Text\.Encoding\]::(Default|ASCII|Unicode|BigEndianUnicode)/.test(body);
+  }
+
   if (writesJournals && ansiReads > 0) {
     findings.push(
       `oa-state.ps1 has a journal WRITE path and ${ansiReads} bare \`Get-Content -Raw -Path $path\` ` +
@@ -183,6 +229,25 @@ try {
       'oa-state.ps1 writes journals but has no Read-JournalText UTF-8 decoder. A partial hand-copy ' +
         'into installed-plugins produces exactly this shape.'
     );
+  }
+  // #602: the decoder exists but does not decode as UTF-8. This is the case the old
+  // existence check could not see, and it is worse than a missing decoder: the function
+  // is present and named, so every reader believes the journal is being read correctly.
+  if (writesJournals && hasUtf8Decoder && !decoderDecodesUtf8) {
+    findings.push(
+      'Read-JournalText exists but names no UTF-8 encoding. A journal read that decodes as ' +
+        'ANSI double-encodes every em-dash, curly quote, emoji and accented name on the surface ' +
+        'Shiv reads (#549), while this guard reports the decoder as present.'
+    );
+  }
+  if (writesJournals && hasUtf8Decoder && decoderNamesAnsi) {
+    findings.push(
+      'Read-JournalText names an ANSI/Default/ASCII encoding in its body. The journal decode path ' +
+        'must be UTF-8 only -- a single ANSI read corrupts the file for every later writer (#549).'
+    );
+  }
+  if (writesJournals && hasUtf8Decoder && decoderDecodesUtf8 && !decoderNamesAnsi) {
+    notes.push('Read-JournalText decodes as UTF-8 (argument checked, not just the call shape)');
   }
   if (!writesJournals) {
     notes.push('no journal write path present (read-only build: safe direction)');

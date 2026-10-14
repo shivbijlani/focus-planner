@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/advertised-reply-word-write/approve-clean",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "blocking",
+        "docBound": false,
+        "docId": "",
+        "findings": [],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 178,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "files": {},
+  "id": "mc/write-turn/g12-old-state-allows",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "908",
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

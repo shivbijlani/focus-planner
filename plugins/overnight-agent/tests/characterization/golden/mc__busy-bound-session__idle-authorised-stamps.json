@@ -1,0 +1,75 @@
+{
+  "files": {
+    "state/task-951.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "951",
+        "plan_id": "t951-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "chat",
+          "last_woken_at": "<NOW+0m>",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "fixture",
+          "replaced_at": "",
+          "session_id": "session-951",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/busy-bound-session/idle-authorised-stamps",
+  "steps": [
+    {
+      "args": {
+        "DispatchInput": "afe78f73d18ce118983718113e5dd13abd526e5adb68851d570242315b0f8e1d",
+        "ForDispatch": true,
+        "Id": "951",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions-busy.json"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": true,
+        "dispatch_eligible": true,
+        "id": "951",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": "<NOW+0m>",
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "fixture",
+        "released": false,
+        "role_line": "You are the task session for planner task #951. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "session-951",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -18,7 +18,9 @@ phone — without opening the planner.
   Deduplicated by a SHA-256 of the turn text, so re-runs never repost unchanged content.
 - **syncDown** (Telegram → journals): reads `getUpdates`, and for every non-bot text reply in
   a mapped topic, appends a dated `<!-- from: me -->` entry to the bottom of that task's
-  journal — exactly the shape the Focus Planner app appends. The agent's normal
+  journal — exactly the shape the Focus Planner app appends. Only the configured owner
+  sender is folded, with a `<!-- via: telegram sender=<id> -->` stamp; other replies are
+  reported as unrouted. The agent's normal
   `oa-state.ps1 scan` then sees the task as `reopened` and picks it up next run.
 
 ## Configuration (environment)
@@ -30,6 +32,7 @@ Windows Credential Manager before invoking the CLI.
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | ✅ | Bot API token. Populate from the OS vault (see below) — never commit it. |
 | `TELEGRAM_CHAT_ID` | ✅ | The forum supergroup chat id (e.g. `-1004310604015`). |
+| `TELEGRAM_BRIDGE_OWNER_USER_ID` | — | Numeric Telegram sender ID allowed to fold replies. Required for folding; missing or invalid IDs disable it. |
 | `PLANNER_PATH` | — | Planner folder. Defaults to `planner-config.json`'s `plannerPath`, else `../planner`. |
 | `TELEGRAM_BRIDGE_TASKS` | — | Comma-separated allowlist of task IDs to mirror. Empty = all tasks with an agent block. |
 | `TELEGRAM_BRIDGE_ARCHIVE` | — | Archive (close) a task's topic when it lands on the completed board, and reopen it if the task leaves. Default **on**; set to `off`/`false`/`0`/`no` to disable. |

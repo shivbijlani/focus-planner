@@ -1,0 +1,104 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-write-turn-sentinel"
+  ],
+  "cases": [
+    {
+      "id": "mc/write-turn-sentinel/lf-adds-one",
+      "files": {
+        "data/journal/task-910.md": "# Task 910: Fixture\n\nUser notes.\n"
+      },
+      "note": "LF no-sentinel journal gains exactly one sentinel.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "910",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn-sentinel/crlf-adds-one-preserves",
+      "files": {
+        "data/journal/task-911.md": "# Task 911: Fixture\r\n\r\nUser notes.\r\n"
+      },
+      "note": "CRLF no-sentinel journal gains a sentinel while preserving CRLF.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "911",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn-sentinel/idempotent-second-turn",
+      "files": {
+        "data/journal/task-912.md": "# Task 912: Fixture\n\nUser notes.\n"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "912",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        },
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "912",
+            "Ask": "none",
+            "DisableGuard": [
+              "G12"
+            ]
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the second thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ],
+      "note": "A second append (with G12 disabled to isolate G6) does not add a second sentinel.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      }
+    },
+    {
+      "id": "mc/write-turn-sentinel/existing-sentinel-not-duplicated",
+      "files": {
+        "data/journal/task-913.md": "# Task 913: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "note": "An existing sentinel is preserved in place, not duplicated.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "913",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    }
+  ]
+}

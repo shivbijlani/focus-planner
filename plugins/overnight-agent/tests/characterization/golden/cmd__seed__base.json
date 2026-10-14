@@ -1,0 +1,43 @@
+{
+  "files": {
+    "state/task-113.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "has_agent_block": false,
+        "id": "113",
+        "plan_id": "",
+        "processed_file_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "seeded": true,
+        "status": "none",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-123.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "has_agent_block": true,
+        "id": "123",
+        "plan_id": "t123-v3",
+        "processed_file_hash": "481f55980e963d68bb34f9c53887dc5ead12473b5390d311281809996aa04625",
+        "seeded": true,
+        "status": "in-progress",
+        "updated": "<NOW+0m>",
+        "version": 3
+      }
+    }
+  },
+  "id": "cmd/seed/base",
+  "steps": [
+    {
+      "command": "seed",
+      "exit": 0,
+      "stdout": [
+        "seeded 2 task state file(s) into <ROOT>/lad/overnight-agent/state"
+      ],
+      "tool": "oa-state"
+    }
+  ]
+}

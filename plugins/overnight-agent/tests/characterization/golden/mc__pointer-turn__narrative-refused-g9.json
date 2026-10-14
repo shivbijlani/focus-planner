@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/pointer-turn/narrative-refused-g9",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Id": "940",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "blocking",
+        "docBound": true,
+        "docId": "DOC1234567890abcdefghijklmnopqrstuvwxyz",
+        "findings": [
+          {
+            "guard": "G9",
+            "line": 1,
+            "snippet": "4770 chars",
+            "why": "this task has a catch-up doc, so a turn is a POINTER, not the story: 4770 chars is over the 1500 ceiling (aim for ~800). Move the narrative, tables and evidence into the doc and amend it in place; leave behind the status, the doc link, a sentence or two, and the ask"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "940",
+        "length": 4770,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

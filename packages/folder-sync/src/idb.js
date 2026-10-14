@@ -45,6 +45,33 @@ export async function idbSet(store, key, value) {
   })
 }
 
+// Compare and commit a snapshot in one transaction. A worker that read before a
+// page's edit must retry its merge, never overwrite that edit with old content.
+export async function idbCompareAndSet(store, expected, writes) {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite')
+    const objectStore = tx.objectStore(store)
+    let matches = true
+    let remaining = expected.length
+    const commit = () => {
+      if (matches) {
+        for (const [key, value] of writes) objectStore.put(value, key)
+      }
+    }
+    if (!remaining) commit()
+    for (const [key, value] of expected) {
+      const req = objectStore.get(key)
+      req.onsuccess = () => {
+        if (JSON.stringify(req.result) !== JSON.stringify(value)) matches = false
+        if (--remaining === 0) commit()
+      }
+    }
+    tx.oncomplete = () => resolve(matches)
+    tx.onabort = tx.onerror = () => reject(tx.error || new Error('IndexedDB snapshot commit failed'))
+  })
+}
+
 export async function idbDel(store, key) {
   const db = await openDB()
   return new Promise((resolve, reject) => {

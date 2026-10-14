@@ -1,0 +1,29 @@
+{
+  "files": {},
+  "id": "mc/doc-consent/floor-outranks-doc-comment",
+  "steps": [
+    {
+      "args": {
+        "Action": "send_email_many",
+        "DocComments": "<ROOT>/input/approved.txt",
+        "Id": "930"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "send_email_many",
+        "consent_ok": false,
+        "gate_list": "ask",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Send-to-many (group/channel, mass email)",
+        "gate_state": "ok",
+        "id": "930",
+        "path": "<ROOT>/data/journal/task-930.md",
+        "reason": "gate-floor-blocks",
+        "repo": null,
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

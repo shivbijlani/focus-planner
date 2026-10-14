@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "sw/g20/path-in-id-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "x/../../agent-gate"
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G20 line 1: -Id must be a task id, not a path. write-turn writes exactly one file, journal/task-<id>.md; agent-gate.md and user-settings.md hold the consent rules and only the user writes them. This guard cannot be disabled",
+        "      | -Id x/../../agent-gate"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

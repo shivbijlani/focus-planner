@@ -1,0 +1,54 @@
+{
+  "files": {
+    "state/task-979.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "979",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "coordinator-session",
+        "plan_id": "t979-v1",
+        "processed_file_hash": "04787646bebd2e156feb0bcc07577ceb330d4c38847d981e3a333435e63edca4",
+        "seeded": false,
+        "session": {
+          "prior_session_id": "",
+          "session_id": "task-session-979"
+        },
+        "status": "proposed",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/coordinator-no-task-work/mark-no-status-allowed",
+  "steps": [
+    {
+      "args": {
+        "Id": "979",
+        "TurnBy": "coordinator-session"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "979",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "coordinator-session",
+        "plan_id": "t979-v1",
+        "processed_file_hash": "04787646bebd2e156feb0bcc07577ceb330d4c38847d981e3a333435e63edca4",
+        "seeded": false,
+        "session": {
+          "prior_session_id": "",
+          "session_id": "task-session-979"
+        },
+        "status": "proposed",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

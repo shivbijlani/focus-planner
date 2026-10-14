@@ -12,9 +12,9 @@ const taskSectionSource = appSource.slice(
 )
 
 describe('task-section journal wiring', () => {
-  it('passes the clicked combined row source into journal creation', () => {
-    expect(taskSectionSource).toContain('onCreateJournal(taskId, taskName, row.__sourceId)')
-    expect(appSource).toContain('const handleCreateJournal = async (taskId, taskName, sourceId)')
+  it('creates journals through the active source', () => {
+    expect(taskSectionSource).toContain('onCreateJournal(taskId, taskName)')
+    expect(appSource).toContain('await storage.write(journalPath, journalContent)')
   })
 
   it('registers seed candidates outside the collapsed-row render gate', () => {

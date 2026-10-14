@@ -1,0 +1,60 @@
+{
+  "files": {},
+  "id": "mc/cadence-rearm/shorten-poll-soon",
+  "steps": [
+    {
+      "args": {
+        "Id": "903",
+        "Poll": "6h"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "903",
+        "PollDone": true
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "903",
+        "Poll": "1m"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "903"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "903",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "poll": {
+          "cadence": "1m",
+          "interval_minutes": 1,
+          "last_polled": "<INVTIME+0m>",
+          "next_due": "<NOW+0m>"
+        },
+        "processed_file_hash": "199a2242514580ec05387ccf34543a3fdbb91d6e93346eccdb1b85dd14f82301",
+        "seeded": false,
+        "status": "unknown",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

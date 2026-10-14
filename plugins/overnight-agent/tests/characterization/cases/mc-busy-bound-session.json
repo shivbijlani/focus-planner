@@ -1,0 +1,387 @@
+{
+  "fixture": "mc-busy-bound-session",
+  "covers": [
+    "mutcheck-busy-bound-session"
+  ],
+  "cases": [
+    {
+      "id": "mc/busy-bound-session/scan-skips-busy-selects-idle",
+      "note": "compact scan marks busy bound session as skip and leaves idle row dispatchable",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 950 | task 950 |\n| 951 | task 951 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-950.md": "# Task 950: task 950\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-951.md": "# Task 951: task 951\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-950.json": {
+          "id": "950",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t950-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-950",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-951.json": {
+          "id": "951",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t951-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-951",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions-busy.json": "{\"sessions\":[{\"id\":\"session-950\",\"activity\":{\"status\":\"busy\"}},{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}",
+        "home/sessions-missing.json": "{\"sessions\":[{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "Compact": true,
+        "SessionsStatusFile": "{home}/sessions-busy.json"
+      }
+    },
+    {
+      "id": "mc/busy-bound-session/for-dispatch-busy-refused",
+      "note": "ForDispatch refuses a busy bound session and leaves last_woken_at empty",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 950 | task 950 |\n| 951 | task 951 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-950.md": "# Task 950: task 950\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-951.md": "# Task 951: task 951\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-950.json": {
+          "id": "950",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t950-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-950",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-951.json": {
+          "id": "951",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t951-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-951",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions-busy.json": "{\"sessions\":[{\"id\":\"session-950\",\"activity\":{\"status\":\"busy\"}},{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}",
+        "home/sessions-missing.json": "{\"sessions\":[{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true,
+            "SessionsStatusFile": "{home}/sessions-busy.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "950",
+            "ForDispatch": true,
+            "DispatchInput": "stale",
+            "SessionsStatusFile": "{home}/sessions-busy.json"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/busy-bound-session/idle-authorised-stamps",
+      "note": "idle bound session can be authorised and receives a wake stamp",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 950 | task 950 |\n| 951 | task 951 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-950.md": "# Task 950: task 950\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-951.md": "# Task 951: task 951\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-950.json": {
+          "id": "950",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t950-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-950",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-951.json": {
+          "id": "951",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t951-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-951",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions-busy.json": "{\"sessions\":[{\"id\":\"session-950\",\"activity\":{\"status\":\"busy\"}},{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}",
+        "home/sessions-missing.json": "{\"sessions\":[{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "951",
+        "ForDispatch": true,
+        "DispatchInput": "afe78f73d18ce118983718113e5dd13abd526e5adb68851d570242315b0f8e1d",
+        "SessionsStatusFile": "{home}/sessions-busy.json"
+      }
+    },
+    {
+      "id": "mc/busy-bound-session/status-required-and-unknown",
+      "note": "dispatch without snapshot refuses and scan with missing session status fails closed",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 950 | task 950 |\n| 951 | task 951 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-950.md": "# Task 950: task 950\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-951.md": "# Task 951: task 951\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-950.json": {
+          "id": "950",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t950-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-950",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-951.json": {
+          "id": "951",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t951-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-951",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions-busy.json": "{\"sessions\":[{\"id\":\"session-950\",\"activity\":{\"status\":\"busy\"}},{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}",
+        "home/sessions-missing.json": "{\"sessions\":[{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "950",
+            "ForDispatch": true,
+            "DispatchInput": "stale"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true,
+            "SessionsStatusFile": "{home}/sessions-missing.json"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/busy-bound-session/decisions-record-busy",
+      "note": "decision ledger records busy_from_earlier_run for skipped busy row and dispatched for chosen idle row",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 950 | task 950 |\n| 951 | task 951 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-950.md": "# Task 950: task 950\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-951.md": "# Task 951: task 951\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-950.json": {
+          "id": "950",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t950-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-950",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-951.json": {
+          "id": "951",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t951-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "session-951",
+            "kind": "chat",
+            "project": "fixture",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions-busy.json": "{\"sessions\":[{\"id\":\"session-950\",\"activity\":{\"status\":\"busy\"}},{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}",
+        "home/sessions-missing.json": "{\"sessions\":[{\"id\":\"session-951\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true,
+            "SessionsStatusFile": "{home}/sessions-busy.json",
+            "ScanOutFile": "{home}/scan.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "decisions",
+          "args": {
+            "RunId": "run-busy",
+            "ScanFile": "{home}/scan.json",
+            "Outcomes": "[{\"id\":\"951\",\"outcome\":\"dispatched\"}]",
+            "RunLedger": "{home}/ledger.jsonl"
+          }
+        }
+      ]
+    }
+  ]
+}

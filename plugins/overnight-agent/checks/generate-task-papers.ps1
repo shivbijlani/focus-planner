@@ -45,18 +45,30 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $PlannerPath) {
   $PlannerPath = if ($env:PLANNER_PATH) { $env:PLANNER_PATH }
+                 elseif ($env:OVERNIGHT_AGENT_PLANNER_DIR) { $env:OVERNIGHT_AGENT_PLANNER_DIR }
                  else { Join-Path $env:OneDrive 'Apps\Focus Planner' }
 }
 if (-not (Test-Path $PlannerPath)) { throw "Planner folder not found: $PlannerPath" }
 
 # The CLI ships in the repo, not in the deployed plugin tree: it imports the app's
 # journal reader and the bridge's status/ask parsers, so it has to run from a checkout
-# where those exist. Resolving it here (rather than hard-coding) keeps a pinned or
-# worktree checkout working, the same way the Telegram "Bridge CLI" row does.
+# where those exist. Resolving it here (rather than hard-coding) keeps a configured
+# repository or worktree checkout working.
 if (-not $Repo) {
   $Repo = if ($env:FOCUS_PLANNER_REPO) { $env:FOCUS_PLANNER_REPO } else { 'V:\repos\focus-planner' }
 }
 $cli = Join-Path $Repo 'packages\task-paper\bin\task-paper.js'
+# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set; then both the
+# planner folder it writes and the checkout it runs from must be inside the sandbox.
+if ($env:OA_SANDBOX_ROOT) {
+  $sbRoot = [IO.Path]::GetFullPath($env:OA_SANDBOX_ROOT).TrimEnd('\', '/')
+  foreach ($pair in @(@('PlannerPath', $PlannerPath), @('Repo', $Repo))) {
+    $full = [IO.Path]::GetFullPath($pair[1]).TrimEnd('\', '/')
+    if (-not ($full -ieq $sbRoot -or $full.StartsWith($sbRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))) {
+      throw "oa_sandbox_violation: $($pair[0]) '$full' is outside OA_SANDBOX_ROOT '$sbRoot'"
+    }
+  }
+}
 if (-not (Test-Path $cli)) { throw "task-paper CLI not found at $cli (set -Repo or FOCUS_PLANNER_REPO)" }
 
 $argv = @('generate', '--planner', $PlannerPath)

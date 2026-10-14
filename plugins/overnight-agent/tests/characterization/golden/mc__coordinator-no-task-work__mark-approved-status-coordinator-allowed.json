@@ -1,0 +1,59 @@
+{
+  "files": {
+    "state/task-977.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "977",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "coordinator-session",
+        "paused_at": null,
+        "plan_id": "t977-v1",
+        "processed_file_hash": "d964dfe236f8239d2a51f649a556441a3fde5960d411de12d02c88fe810d5223",
+        "seeded": false,
+        "session": {
+          "prior_session_id": "",
+          "session_id": "task-session-977"
+        },
+        "status": "approved",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/coordinator-no-task-work/mark-approved-status-coordinator-allowed",
+  "steps": [
+    {
+      "args": {
+        "Id": "977",
+        "Status": "approved",
+        "TurnBy": "coordinator-session"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "977",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "coordinator-session",
+        "paused_at": null,
+        "plan_id": "t977-v1",
+        "processed_file_hash": "d964dfe236f8239d2a51f649a556441a3fde5960d411de12d02c88fe810d5223",
+        "seeded": false,
+        "session": {
+          "prior_session_id": "",
+          "session_id": "task-session-977"
+        },
+        "status": "approved",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

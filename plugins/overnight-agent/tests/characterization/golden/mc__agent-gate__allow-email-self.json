@@ -1,0 +1,28 @@
+{
+  "files": {},
+  "id": "mc/agent-gate/allow-email-self",
+  "steps": [
+    {
+      "args": {
+        "Action": "send_email_self",
+        "Id": "114"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "send_email_self",
+        "consent_ok": true,
+        "gate_list": "allow",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Emailing myself",
+        "gate_state": "ok",
+        "id": "114",
+        "path": "<ROOT>/data/journal/task-114.md",
+        "reason": "gate-allowed",
+        "repo": null,
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

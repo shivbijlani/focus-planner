@@ -1,0 +1,233 @@
+{
+  "files": {
+    "home/ledger.jsonl": {
+      "change": "created",
+      "jsonl": [
+        {
+          "at": "<NOW+0m>",
+          "dispatched": [
+            {
+              "at": "<NOW+0m>",
+              "id": "951",
+              "sessionId": null
+            }
+          ],
+          "kind": "decision",
+          "rows": [
+            {
+              "eligible": true,
+              "id": "950",
+              "order": 1,
+              "reason": "busy_from_earlier_run",
+              "section": "today"
+            },
+            {
+              "eligible": true,
+              "id": "951",
+              "order": 2,
+              "reason": "dispatched",
+              "section": "today"
+            }
+          ],
+          "runId": "run-busy",
+          "schema": "oa-decisions/1",
+          "summary": {
+            "rows_dropped": 0,
+            "rows_eligible": 2,
+            "rows_omitted": 0,
+            "rows_recorded": 2,
+            "rows_returned": 2,
+            "rows_total": 2,
+            "scan_seconds": "<DURATION>",
+            "today_holding": 2
+          }
+        }
+      ]
+    },
+    "home/scan.json": {
+      "change": "created",
+      "json": {
+        "rows": [
+          {
+            "awaiting_reply": false,
+            "board_pos": 1,
+            "changed": true,
+            "consent_ok": false,
+            "dispatch_input": "2cac0fddde02440dda4facb3619b2422ed9c4fafb03706a0e44db3e05a879da0",
+            "dispatch_skip_reason": "busy_from_earlier_run",
+            "doc_channel": null,
+            "doc_id": null,
+            "doc_new_comments": 0,
+            "due_poll": false,
+            "due_recheck": false,
+            "eligible": true,
+            "has_agent_block": true,
+            "has_journal": true,
+            "has_open_ask": false,
+            "holds_today_gate": true,
+            "id": "950",
+            "linked": [],
+            "order": 1,
+            "plan_review_due": false,
+            "poll_cadence": null,
+            "priorities_rank": 999999,
+            "recheck_kind": null,
+            "reopened": false,
+            "reopened_closed": false,
+            "replacements_24h": 0,
+            "section": "today",
+            "session_activity": "busy",
+            "session_id": "session-950",
+            "session_paused": false,
+            "session_process_dead": false,
+            "session_verdict": "reuse",
+            "session_workspace_missing": false,
+            "snooze_until": null,
+            "snoozed": false,
+            "status": "in-progress",
+            "status_by": "agent",
+            "today_release_reason": "holding:no_declaration",
+            "tracked": true,
+            "unanswered_user": false,
+            "unanswered_user_where": "",
+            "urgency": "task 950",
+            "work_priority": null
+          },
+          {
+            "awaiting_reply": false,
+            "board_pos": 2,
+            "changed": true,
+            "consent_ok": false,
+            "dispatch_input": "afe78f73d18ce118983718113e5dd13abd526e5adb68851d570242315b0f8e1d",
+            "dispatch_skip_reason": null,
+            "doc_channel": null,
+            "doc_id": null,
+            "doc_new_comments": 0,
+            "due_poll": false,
+            "due_recheck": false,
+            "eligible": true,
+            "has_agent_block": true,
+            "has_journal": true,
+            "has_open_ask": false,
+            "holds_today_gate": true,
+            "id": "951",
+            "linked": [],
+            "order": 2,
+            "plan_review_due": false,
+            "poll_cadence": null,
+            "priorities_rank": 999999,
+            "recheck_kind": null,
+            "reopened": false,
+            "reopened_closed": false,
+            "replacements_24h": 0,
+            "section": "today",
+            "session_activity": "idle",
+            "session_id": "session-951",
+            "session_paused": false,
+            "session_process_dead": false,
+            "session_verdict": "reuse",
+            "session_workspace_missing": false,
+            "snooze_until": null,
+            "snoozed": false,
+            "status": "in-progress",
+            "status_by": "agent",
+            "today_release_reason": "holding:no_declaration",
+            "tracked": true,
+            "unanswered_user": false,
+            "unanswered_user_where": "",
+            "urgency": "task 951",
+            "work_priority": null
+          }
+        ],
+        "summary": {
+          "omitted_reason": "ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist",
+          "out_file": null,
+          "rows_due_poll": 0,
+          "rows_eligible": 2,
+          "rows_no_journal": 0,
+          "rows_omitted": 0,
+          "rows_reopened": 0,
+          "rows_returned": 2,
+          "rows_total": 2,
+          "rows_unanswered": 0,
+          "scan_seconds": "<DURATION>",
+          "today_holding": 2
+        }
+      }
+    }
+  },
+  "id": "mc/busy-bound-session/decisions-record-busy",
+  "steps": [
+    {
+      "args": {
+        "Compact": true,
+        "ScanOutFile": "<ROOT>/lad/overnight-agent/scan.json",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions-busy.json"
+      },
+      "command": "scan",
+      "exit": 0,
+      "json": {
+        "out_file": "<ROOT>/lad/overnight-agent/scan.json",
+        "rows_due_poll": 0,
+        "rows_eligible": 2,
+        "rows_no_journal": 0,
+        "rows_reopened": 0,
+        "rows_total": 2,
+        "rows_unanswered": 0,
+        "scan_seconds": "<DURATION>",
+        "today_holding": 2
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Outcomes": "[{\"id\":\"951\",\"outcome\":\"dispatched\"}]",
+        "RunId": "run-busy",
+        "RunLedger": "<ROOT>/lad/overnight-agent/ledger.jsonl",
+        "ScanFile": "<ROOT>/lad/overnight-agent/scan.json"
+      },
+      "command": "decisions",
+      "exit": 0,
+      "json": {
+        "at": "<NOW+0m>",
+        "dispatched": [
+          {
+            "at": "<NOW+0m>",
+            "id": "951",
+            "sessionId": null
+          }
+        ],
+        "kind": "decision",
+        "rows": [
+          {
+            "eligible": true,
+            "id": "950",
+            "order": 1,
+            "reason": "busy_from_earlier_run",
+            "section": "today"
+          },
+          {
+            "eligible": true,
+            "id": "951",
+            "order": 2,
+            "reason": "dispatched",
+            "section": "today"
+          }
+        ],
+        "runId": "run-busy",
+        "schema": "oa-decisions/1",
+        "summary": {
+          "rows_dropped": 0,
+          "rows_eligible": 2,
+          "rows_omitted": 0,
+          "rows_recorded": 2,
+          "rows_returned": 2,
+          "rows_total": 2,
+          "scan_seconds": "<DURATION>",
+          "today_holding": 2
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

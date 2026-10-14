@@ -39,6 +39,8 @@ if (-not $ScriptPath) {
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
 $ScriptPath = (Resolve-Path $ScriptPath).Path
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 # A journal whose newest agent turn is IN-PROGRESS and carries one `Needs from you:` value.
 # `{ASK}` is substituted per case. The provenance stamp is required (G7), and the turn-end
@@ -111,8 +113,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $journals "task-$($c.id).md"), $body, $utf8)
   }
 
-  $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath scan `
-           -JournalDir $journals -StateDir $state 2>&1
+  $raw = & $script:OaCmd.Exe @($script:OaCmd.Prefix + @('scan', '-JournalDir', $journals, '-StateDir', $state)) 2>&1
   $text = ($raw | Out-String)
   if ($LASTEXITCODE -ne 0) { throw "scan failed (exit $LASTEXITCODE):`n$text" }
 

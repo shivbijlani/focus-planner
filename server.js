@@ -9,9 +9,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+// Overridable so tests can run an isolated instance; defaults are unchanged.
+const PORT = Number(process.env.PLANNER_API_PORT) || 3001;
 
-const CONFIG_PATH = path.join(__dirname, 'planner-config.json');
+const CONFIG_PATH = process.env.PLANNER_CONFIG_PATH || path.join(__dirname, 'planner-config.json');
 const DEFAULT_PLANNER_PATH = path.join(__dirname, '..', 'planner');
 
 async function loadConfig() {
@@ -26,6 +27,15 @@ async function loadConfig() {
 
 async function saveConfig(plannerPath) {
   await fs.writeFile(CONFIG_PATH, JSON.stringify({ plannerPath }, null, 2), 'utf-8');
+}
+
+function resolvePlannerPath(filePath) {
+  const fullPath = path.resolve(PLANNER_PATH, filePath);
+  const relativePath = path.relative(PLANNER_PATH, fullPath);
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    return null;
+  }
+  return fullPath;
 }
 
 // Mutable planner path (loaded from config on startup)
@@ -84,10 +94,8 @@ app.get('/api/file', async (req, res) => {
     if (!filePath) {
       return res.status(400).json({ error: 'Missing path parameter' });
     }
-    const fullPath = path.join(PLANNER_PATH, filePath);
-    
-    // Security: ensure path is within PLANNER_PATH
-    if (!fullPath.startsWith(PLANNER_PATH)) {
+    const fullPath = resolvePlannerPath(filePath);
+    if (!fullPath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -105,10 +113,8 @@ app.put('/api/file', async (req, res) => {
     if (!filePath) {
       return res.status(400).json({ error: 'Missing path parameter' });
     }
-    const fullPath = path.join(PLANNER_PATH, filePath);
-    
-    // Security: ensure path is within PLANNER_PATH
-    if (!fullPath.startsWith(PLANNER_PATH)) {
+    const fullPath = resolvePlannerPath(filePath);
+    if (!fullPath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -127,10 +133,8 @@ app.delete('/api/file', async (req, res) => {
     if (!filePath) {
       return res.status(400).json({ error: 'Missing path parameter' });
     }
-    const fullPath = path.join(PLANNER_PATH, filePath);
-    
-    // Security: ensure path is within PLANNER_PATH
-    if (!fullPath.startsWith(PLANNER_PATH)) {
+    const fullPath = resolvePlannerPath(filePath);
+    if (!fullPath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -148,10 +152,8 @@ app.get('/api/todos', async (req, res) => {
     if (!filePath) {
       return res.status(400).json({ error: 'Missing path parameter' });
     }
-    const fullPath = path.join(PLANNER_PATH, filePath);
-    
-    // Security: ensure path is within PLANNER_PATH
-    if (!fullPath.startsWith(PLANNER_PATH)) {
+    const fullPath = resolvePlannerPath(filePath);
+    if (!fullPath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 

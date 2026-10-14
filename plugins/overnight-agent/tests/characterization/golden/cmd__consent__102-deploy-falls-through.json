@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "cmd/consent/102-deploy-falls-through",
+  "steps": [
+    {
+      "args": {
+        "Action": "deploy",
+        "Id": "102"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "deploy",
+        "affirmative_answered": false,
+        "affirmative_author": null,
+        "affirmative_phrase": null,
+        "affirmative_unattributed": false,
+        "consent_ok": false,
+        "gate_list": null,
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": null,
+        "gate_state": "ok",
+        "human_segments": 0,
+        "id": "102",
+        "path": "<ROOT>/data/journal/task-102.md",
+        "reason": "no-trailing-content",
+        "repo": null,
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

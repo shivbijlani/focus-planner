@@ -55,7 +55,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $RED = [char]::ConvertFromUtf32(0x1F534)
 $YEL = [char]::ConvertFromUtf32(0x1F7E1)
@@ -120,8 +122,8 @@ $sb = New-Object Text.StringBuilder
 
 function Invoke-Oa {
   param([string[]]$OaArgs)
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @OaArgs `
-    -JournalDir $jdir -StateDir $sdir -PlannerBoard $board -SnoozeStore $store 2>&1
+  & $script:OaCmd.Exe @($script:OaCmd.Prefix + $OaArgs +
+    @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)) 2>&1
 }
 
 function Get-Rows {

@@ -1,0 +1,61 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-shipped-pick"
+  ],
+  "cases": [
+    {
+      "id": "mc/shipped-pick/proposed-shipped-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "env": {
+        "CHAR_SHIPPED": "640"
+      },
+      "body": "## 🌙 Overnight Agent — shipped pick\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\n**Next:** pick up #640 next wake.\n",
+      "note": "A forward-looking pick of an already-shipped issue is refused by G15."
+    },
+    {
+      "id": "mc/shipped-pick/unshipped-pick-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "env": {
+        "CHAR_SHIPPED": "640"
+      },
+      "body": "## 🌙 Overnight Agent — shipped pick\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\n**Next:** pick up #642 next wake.\n",
+      "note": "The same proposal clears when the issue is not shipped."
+    },
+    {
+      "id": "mc/shipped-pick/report-shipped-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "env": {
+        "CHAR_SHIPPED": "640"
+      },
+      "body": "## 🌙 Overnight Agent — shipped pick\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nShipped the fix for #640.\n\n**Next:** update the doc.\n",
+      "note": "A report of shipped work is not refused."
+    },
+    {
+      "id": "mc/shipped-pick/pr-number-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "env": {
+        "CHAR_SHIPPED": "640"
+      },
+      "body": "## 🌙 Overnight Agent — shipped pick\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\n**Next:** land PR #640 next wake.\n",
+      "note": "A PR number on a Next line is not treated as an issue pick."
+    }
+  ]
+}

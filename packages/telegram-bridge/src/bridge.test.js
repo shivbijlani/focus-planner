@@ -86,7 +86,7 @@ function makeHarness(files) {
     },
   }
 
-  const config = { chatId: '-100', taskAllowlist: [] }
+  const config = { chatId: '-100', taskAllowlist: [], ownerUserId: 12345 }
   return {
     store,
     sent,
@@ -414,7 +414,12 @@ describe('the collapse boundary is the reply counter, not userEngaged (#278)', (
   const replyUpdate = (text) => [
     {
       update_id: 1,
-      message: { message_id: 900, text, message_thread_id: 1, from: { is_bot: false } },
+      message: {
+        message_id: 900,
+        text,
+        message_thread_id: 1,
+        from: { is_bot: false, id: 12345 },
+      },
     },
   ]
 
@@ -797,12 +802,23 @@ describe('syncDown', () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })
     const state = emptyState()
     state.tasks['42'] = { topicId: 7, name: '#42' }
-    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+    const day = '2026-10-04'
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state,
+      io: h.io,
+      now: () => new Date(`${day}T12:00:00.000Z`),
+    })
 
     h.queueUpdates([
       {
         update_id: 100,
-        message: { message_thread_id: 7, text: 'looks good, ship it', from: { is_bot: false } },
+        message: {
+          message_thread_id: 7,
+          text: 'looks good, ship it',
+          from: { is_bot: false, id: 12345 },
+        },
       },
     ])
 
@@ -810,8 +826,111 @@ describe('syncDown', () => {
     expect(res.folded).toHaveLength(1)
     expect(res.folded[0].taskId).toBe('42')
     expect(h.store['42']).toContain(FROM_ME)
+    expect(h.store['42']).toContain(
+      `## ${day}\n\n${FROM_ME}\n<!-- via: telegram sender=12345 -->\n`,
+    )
     expect(h.store['42']).toContain('looks good, ship it')
     expect(state.updateOffset).toBe(101)
+  })
+
+  it('reports non-owner replies without folding them', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    h.queueUpdates([
+      {
+        update_id: 101,
+        message: {
+          message_id: 21,
+          message_thread_id: 7,
+          text: 'not the owner',
+          from: { is_bot: false, id: 67890 },
+        },
+      },
+    ])
+
+    const res = await bridge.syncDown()
+    expect(res.folded).toHaveLength(0)
+    expect(res.unrouted).toEqual([
+      { text: 'not the owner', messageId: 21, threadId: 7 },
+    ])
+    expect(h.store['42']).toBe(AGENT_JOURNAL)
+  })
+
+  it('fails closed and warns once when the owner sender ID is missing or invalid', async () => {
+    for (const ownerUserId of [undefined, null, 'not-an-id']) {
+      const h = makeHarness({ 42: AGENT_JOURNAL })
+      h.config.ownerUserId = ownerUserId
+      const state = emptyState()
+      state.tasks['42'] = { topicId: 7, name: '#42' }
+      const logs = []
+      const bridge = createBridge({
+        client: h.client,
+        config: h.config,
+        state,
+        io: h.io,
+        logger: (message) => logs.push(message),
+      })
+      h.queueUpdates([
+        {
+          update_id: 102,
+          message: {
+            message_id: 22,
+            message_thread_id: 7,
+            text: 'cannot verify sender',
+            from: { is_bot: false, id: 12345 },
+          },
+        },
+        {
+          update_id: 103,
+          message: {
+            message_id: 23,
+            message_thread_id: 7,
+            text: 'still cannot verify sender',
+            from: { is_bot: false, id: 12345 },
+          },
+        },
+      ])
+
+      const res = await bridge.syncDown()
+      expect(res.folded).toHaveLength(0)
+      expect(res.unrouted).toHaveLength(2)
+      expect(h.store['42']).toBe(AGENT_JOURNAL)
+      expect(logs.filter((line) => line.includes('missing or invalid'))).toHaveLength(1)
+    }
+  })
+
+  it('merges same-day owner replies under one stamped marker', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    const day = '2026-10-04'
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state,
+      io: h.io,
+      now: () => new Date(`${day}T12:00:00.000Z`),
+    })
+    h.queueUpdates([
+      {
+        update_id: 103,
+        message: { message_thread_id: 7, text: 'first reply', from: { is_bot: false, id: 12345 } },
+      },
+      {
+        update_id: 104,
+        message: { message_thread_id: 7, text: 'second reply', from: { is_bot: false, id: 12345 } },
+      },
+    ])
+
+    const res = await bridge.syncDown()
+    expect(res.folded).toHaveLength(2)
+    expect(h.store['42'].match(new RegExp(`## ${day}`, 'g'))).toHaveLength(1)
+    expect(h.store['42'].match(new RegExp(FROM_ME, 'g'))).toHaveLength(1)
+    expect(h.store['42'].match(/<!-- via: telegram sender=12345 -->/g)).toHaveLength(1)
+    expect(h.store['42']).toContain('first reply\nsecond reply')
   })
 
   it('ignores bot messages, unmapped topics, and empty text', async () => {
@@ -821,13 +940,23 @@ describe('syncDown', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     h.queueUpdates([
-      { update_id: 5, message: { message_thread_id: 7, text: 'echo', from: { is_bot: true } } },
-      { update_id: 6, message: { message_thread_id: 999, text: 'stray', from: { is_bot: false } } },
-      { update_id: 7, message: { message_thread_id: 7, text: '   ', from: { is_bot: false } } },
+      {
+        update_id: 5,
+        message: { message_thread_id: 7, text: 'echo', from: { is_bot: true, id: 12345 } },
+      },
+      {
+        update_id: 6,
+        message: { message_thread_id: 999, text: 'stray', from: { is_bot: false, id: 12345 } },
+      },
+      {
+        update_id: 7,
+        message: { message_thread_id: 7, text: '   ', from: { is_bot: false, id: 12345 } },
+      },
     ])
 
     const res = await bridge.syncDown()
     expect(res.folded).toHaveLength(0)
+    expect(res.unrouted).toHaveLength(1)
     // Offset still advances past processed updates so we don't re-fetch them.
     expect(state.updateOffset).toBe(8)
     expect(h.store['42']).toBe(AGENT_JOURNAL)
@@ -847,7 +976,7 @@ describe('syncDown', () => {
         message: {
           message_id: 9,
           text: 'merge 42; go on 77',
-          from: { is_bot: false },
+          from: { is_bot: false, id: 12345 },
         },
       },
     ])
@@ -865,7 +994,10 @@ describe('syncDown', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     h.queueUpdates([
-      { update_id: 300, message: { message_id: 11, text: 'merge 42', from: { is_bot: false } } },
+      {
+        update_id: 300,
+        message: { message_id: 11, text: 'merge 42', from: { is_bot: false, id: 12345 } },
+      },
     ])
 
     await bridge.syncDown()
@@ -883,7 +1015,12 @@ describe('syncDown', () => {
     h.queueUpdates([
       {
         update_id: 400,
-        message: { message_id: 12, message_thread_id: 7, text: 'ship it', from: { is_bot: false } },
+        message: {
+          message_id: 12,
+          message_thread_id: 7,
+          text: 'ship it',
+          from: { is_bot: false, id: 12345 },
+        },
       },
     ])
 
@@ -898,7 +1035,10 @@ describe('syncDown', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     h.queueUpdates([
-      { update_id: 500, message: { message_id: 13, text: 'merge all', from: { is_bot: false } } },
+      {
+        update_id: 500,
+        message: { message_id: 13, text: 'merge all', from: { is_bot: false, id: 12345 } },
+      },
     ])
 
     const res = await bridge.syncDown()
@@ -920,7 +1060,11 @@ describe('syncDown', () => {
     h.queueUpdates([
       {
         update_id: 600,
-        message: { message_id: 14, text: 'merge 42; go on 77', from: { is_bot: false } },
+        message: {
+          message_id: 14,
+          text: 'merge 42; go on 77',
+          from: { is_bot: false, id: 12345 },
+        },
       },
     ])
 
@@ -939,7 +1083,10 @@ describe('syncDown', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     h.queueUpdates([
-      { update_id: 700, message: { message_id: 15, text: 'merge 42', from: { is_bot: false } } },
+      {
+        update_id: 700,
+        message: { message_id: 15, text: 'merge 42', from: { is_bot: false, id: 12345 } },
+      },
     ])
 
     const res = await bridge.syncDown()
@@ -1044,7 +1191,12 @@ describe('syncUp does not disturb tasks the user has already closed', () => {
     h.queueUpdates([
       {
         update_id: 900,
-        message: { message_thread_id: 7, message_id: 3, text: 'why did this run?', from: { is_bot: false } },
+        message: {
+          message_thread_id: 7,
+          message_id: 3,
+          text: 'why did this run?',
+          from: { is_bot: false, id: 12345 },
+        },
       },
     ])
     await bridge.syncDown()
@@ -1674,7 +1826,7 @@ describe('syncDigest destination', () => {
     h.queueUpdates([
       {
         update_id: 1,
-        message: { message_id: 9, message_thread_id: 1, text: '#42 approve', from: { id: 5 } },
+        message: { message_id: 9, message_thread_id: 1, text: '#42 approve', from: { id: 12345 } },
       },
     ])
     const down = await bridge.syncDown()
@@ -2387,4 +2539,3 @@ describe('syncDigest drops tasks the user has closed on the board (#174)', () =>
     expect(text).not.toContain('447')
   })
 })
-

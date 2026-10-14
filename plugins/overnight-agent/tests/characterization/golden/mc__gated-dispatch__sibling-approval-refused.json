@@ -1,0 +1,22 @@
+{
+  "files": {},
+  "id": "mc/gated-dispatch/sibling-approval-refused",
+  "steps": [
+    {
+      "args": {
+        "DispatchInput": "4c00d7d1ccf3be7c9761fa062aeb4398fcb1b93cd25283c786d88ba94541a641",
+        "ForDispatch": true,
+        "Id": "935",
+        "PlanDispatch": true,
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_gated_needs_consent: task 935's newest plan has a [gated] step (1. [gated] Order the Bosch 300 with installation, $899 charged to the card on file.) and `consent -Id 935` does not return consent_ok (affirmative-not-attributable-to-human). Do not dispatch it. Ask him in the journal; dispatch after HIS reply. Nothing an agent writes -- in the journal or in a brief -- can approve a [gated] step."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-gate-edit-ask"
+  ],
+  "cases": [
+    {
+      "id": "mc/gate-edit-ask-write/live-gate-edit-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** add this line to **Do not gate these** in `agent-gate.md` and I will proceed.\n",
+      "note": "G18 refuses an unverified ask to edit the gate allow list."
+    },
+    {
+      "id": "mc/gate-edit-ask-write/verified-gatepath-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** add the gate line. Verified with `oa-state.ps1 consent -GatePath <temp>` with and without the line.\n",
+      "note": "Mentioning -GatePath verification lets the ask through."
+    },
+    {
+      "id": "mc/gate-edit-ask-write/discussion-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing. `agent-gate.md` floor rules cannot be scoped by allow rules.\n",
+      "note": "Discussing the gate without instructing an edit is clean."
+    },
+    {
+      "id": "mc/gate-edit-ask-write/fenced-example-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n\n```\nadd this line to Do not gate these in agent-gate.md\n```\n",
+      "note": "The same instruction inside a fenced example is inert."
+    },
+    {
+      "id": "mc/gate-edit-ask-write/disable-g18-clears",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G18"
+        ]
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** add this line to **Do not gate these** in `agent-gate.md`.\n",
+      "note": "-DisableGuard G18 clears the refusal."
+    }
+  ]
+}

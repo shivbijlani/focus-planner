@@ -1,0 +1,165 @@
+{
+  "files": {
+    "state/task-913.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "913",
+        "plan_id": "t913-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "33333333-3333-4333-8333-333333333333",
+          "prior_session_ids": [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            "33333333-3333-4333-8333-333333333333"
+          ],
+          "project": "focus-planner",
+          "replaced_at": "<NOW+0m>",
+          "session_id": "44444444-4444-4444-8444-444444444444",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-913-4",
+          "workspace_type": "worktree"
+        },
+        "session_replacements": [
+          {
+            "at": "<NOW+0m>",
+            "session_id": "11111111-1111-4111-8111-111111111111"
+          },
+          {
+            "at": "<NOW+0m>",
+            "session_id": "22222222-2222-4222-8222-222222222222"
+          },
+          {
+            "at": "<NOW+0m>",
+            "session_id": "33333333-3333-4333-8333-333333333333"
+          }
+        ],
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/session-bind-backwards/new-session-after-chain",
+  "steps": [
+    {
+      "args": {
+        "Id": "913",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-913-1",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "913",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "913",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-913-2",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "913",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "913",
+        "SessionId": "33333333-3333-4333-8333-333333333333",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-913-3",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "913",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "913",
+        "SessionId": "44444444-4444-4444-8444-444444444444",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-913-4",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "<NOW+0m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "913",
+        "kickoff_continuation": null,
+        "kind": "code",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": "33333333-3333-4333-8333-333333333333",
+        "prior_session_ids": [
+          "11111111-1111-4111-8111-111111111111",
+          "22222222-2222-4222-8222-222222222222",
+          "33333333-3333-4333-8333-333333333333"
+        ],
+        "process_dead": false,
+        "project": "focus-planner",
+        "released": false,
+        "role_line": "You are the task session for planner task #913. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "state": "live",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-913-4\"",
+        "verdict": "reuse",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-913-4",
+        "workspace_missing": false,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

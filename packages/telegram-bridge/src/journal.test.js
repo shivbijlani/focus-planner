@@ -90,6 +90,45 @@ describe('appendUserReply', () => {
     expect(out).toContain(FROM_ME)
     expect(out.trimEnd().endsWith('looks good')).toBe(true)
   })
+
+  it('appends a separate Telegram entry after an unstamped composer block', () => {
+    const composerBlock = `# Task 42: Test task
+
+## 2026-07-09
+
+${FROM_ME}
+Composer-written text
+`
+    const out = appendUserReply(composerBlock, {
+      text: 'Telegram reply',
+      date: '2026-07-09',
+      senderId: 12345,
+    })
+
+    expect(out).toBe(
+      `${composerBlock.trimEnd()}\n\n## 2026-07-09\n\n${FROM_ME}\n<!-- via: telegram sender=12345 -->\nTelegram reply\n`,
+    )
+  })
+
+  it('merges into a same-day block stamped by the same Telegram sender', () => {
+    const telegramBlock = `# Task 42: Test task
+
+## 2026-07-09
+
+${FROM_ME}
+<!-- via: telegram sender=12345 -->
+First Telegram reply
+`
+    const out = appendUserReply(telegramBlock, {
+      text: 'Second Telegram reply',
+      date: '2026-07-09',
+      senderId: 12345,
+    })
+
+    expect(out).toBe(
+      `# Task 42: Test task\n\n## 2026-07-09\n\n${FROM_ME}\n<!-- via: telegram sender=12345 -->\nFirst Telegram reply\nSecond Telegram reply\n`,
+    )
+  })
 })
 
 describe('topicName', () => {

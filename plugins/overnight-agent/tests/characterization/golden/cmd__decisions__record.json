@@ -1,0 +1,115 @@
+{
+  "files": {
+    "home/run-ledger.jsonl": {
+      "change": "created",
+      "jsonl": [
+        {
+          "at": "2020-03-01T12:10:00.0000000Z",
+          "dispatched": [
+            {
+              "at": "2020-03-01T12:05:00.0000000Z",
+              "id": "101",
+              "sessionId": "sess-101"
+            }
+          ],
+          "kind": "decision",
+          "rows": [
+            {
+              "eligible": true,
+              "id": "101",
+              "order": 1,
+              "reason": "dispatched",
+              "section": "today"
+            },
+            {
+              "eligible": false,
+              "id": "102",
+              "order": 2,
+              "reason": "ineligible:holding:not_exhausted",
+              "section": "today"
+            },
+            {
+              "eligible": true,
+              "id": "109",
+              "order": 3,
+              "reason": "capacity",
+              "section": "deferred"
+            }
+          ],
+          "runId": "run-2020-03-01-1200",
+          "schema": "oa-decisions/1",
+          "summary": {
+            "rows_dropped": 0,
+            "rows_eligible": 2,
+            "rows_omitted": 1,
+            "rows_recorded": 3,
+            "rows_returned": 3,
+            "rows_total": 4,
+            "scan_seconds": "<DURATION>",
+            "today_holding": 1
+          }
+        }
+      ]
+    }
+  },
+  "id": "cmd/decisions/record",
+  "steps": [
+    {
+      "args": {
+        "DecisionNow": "2020-03-01T12:10:00Z",
+        "Outcomes": "<ROOT>/lad/overnight-agent/outcomes.json",
+        "RunId": "run-2020-03-01-1200",
+        "ScanFile": "<ROOT>/lad/overnight-agent/compact-scan.json"
+      },
+      "command": "decisions",
+      "exit": 0,
+      "json": {
+        "at": "2020-03-01T12:10:00.0000000Z",
+        "dispatched": [
+          {
+            "at": "2020-03-01T12:05:00.0000000Z",
+            "id": "101",
+            "sessionId": "sess-101"
+          }
+        ],
+        "kind": "decision",
+        "rows": [
+          {
+            "eligible": true,
+            "id": "101",
+            "order": 1,
+            "reason": "dispatched",
+            "section": "today"
+          },
+          {
+            "eligible": false,
+            "id": "102",
+            "order": 2,
+            "reason": "ineligible:holding:not_exhausted",
+            "section": "today"
+          },
+          {
+            "eligible": true,
+            "id": "109",
+            "order": 3,
+            "reason": "capacity",
+            "section": "deferred"
+          }
+        ],
+        "runId": "run-2020-03-01-1200",
+        "schema": "oa-decisions/1",
+        "summary": {
+          "rows_dropped": 0,
+          "rows_eligible": 2,
+          "rows_omitted": 1,
+          "rows_recorded": 3,
+          "rows_returned": 3,
+          "rows_total": 4,
+          "scan_seconds": "<DURATION>",
+          "today_holding": 1
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

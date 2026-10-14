@@ -1,5 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { resolve, dirname } from 'node:path'
+import process from 'node:process'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Build identifier (UTC build time) surfaced in Settings so users can confirm
 // the running version after an "Update app" — and so support can tell whether a
@@ -10,6 +15,38 @@ const BUILD_ID = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16)
 export default defineConfig({
   plugins: [react()],
   base: '/',
+  resolve: {
+    alias: [
+      {
+        find: '#planner/deployment-profile',
+        replacement: resolve(__dirname, process.env.VITE_PROFILE_MODULE || 'src/config/profile.js'),
+      },
+      {
+        find: '#planner/host-provider',
+        replacement: resolve(__dirname, process.env.VITE_HOST_PROVIDER_MODULE || 'src/host/DefaultHostProvider.jsx'),
+      },
+      {
+        find: '#planner/storage-bootstrap',
+        replacement: resolve(__dirname, process.env.VITE_STORAGE_BOOTSTRAP_MODULE || 'src/storage/registerBuiltinProviders.js'),
+      },
+      {
+        find: '#planner/docs-bootstrap',
+        replacement: resolve(__dirname, process.env.VITE_DOCS_BOOTSTRAP_MODULE || 'src/docs-app/storageBoot.js'),
+      },
+    ],
+  },
+  build: {
+    // Two apps, one origin (plans/docs-app-design.md §3): Focus Planner (index.html) and
+    // Docs (docs.html). Shared modules (storage, folder-sync) are emitted as common chunks,
+    // and both pages register the same network-first service worker (public/app-sw.js),
+    // so deploying one never strands the other on a stale cache.
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        docs: resolve(__dirname, 'docs.html'),
+      },
+    },
+  },
   define: {
     __APP_BUILD__: JSON.stringify(BUILD_ID),
   },
@@ -19,6 +56,7 @@ export default defineConfig({
     // %LOCALAPPDATA%, shell out, and call process.exit(). Collecting them makes vitest fail
     // the whole run on the Linux CI runner, where %LOCALAPPDATA% is undefined. They are run
     // by run-sweeps.ps1, which is the only thing that can supply their environment.
-    exclude: ['**/node_modules/**', '**/dist/**', 'plugins/**'],
+    // `e2e/` is the Playwright smoke suite (`npm run test:smoke`), not vitest.
+    exclude: ['**/node_modules/**', '**/dist/**', 'plugins/**', 'e2e/**'],
   },
 })

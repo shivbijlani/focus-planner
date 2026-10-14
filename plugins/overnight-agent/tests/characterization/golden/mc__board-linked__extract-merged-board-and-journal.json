@@ -1,0 +1,59 @@
+{
+  "files": {},
+  "id": "mc/board-linked/extract-merged-board-and-journal",
+  "steps": [
+    {
+      "args": {
+        "BudgetKB": 2,
+        "Id": "902"
+      },
+      "command": "extract",
+      "exit": 0,
+      "stdout": [
+        "# task-902 -- BOUNDED EXTRACT (read-only)",
+        "",
+        "source: <ROOT>/data/journal/task-902.md",
+        "source 0.1 KB / emitted 0.1 KB (ceiling 4 KB, ~0K tokens)",
+        "",
+        "This is a BOUNDED extract, not the whole journal. Every line below is VERBATIM from the source; nothing is summarised. Nothing was elided: this is the complete journal.",
+        "",
+        "## HEAD -- the user's framing",
+        "_Everything above the first machine turn: decisions, constraints, links._",
+        "",
+        "# Task 902: merged links",
+        "",
+        "User framing at the top.",
+        "**Linked:** #900",
+        "",
+        "## OPEN ASKS (newest agent turn)",
+        "",
+        "(none)",
+        "",
+        "## USER MESSAGES (newest first)",
+        "_Attributed to the human. Later messages supersede earlier ones, so read top-down._",
+        "",
+        "(none positively attributed -- see HEAD and TRAILING)",
+        "",
+        "## LATEST AGENT TURN",
+        "_The newest turn only. Earlier turns are deliberately not read._",
+        "(empty)",
+        "",
+        "## TRAILING USER PROSE",
+        "_Below the turn-end stamp: the unanswered reply, if any._",
+        "",
+        "# Task 902: merged links",
+        "",
+        "User framing at the top.",
+        "**Linked:** #900",
+        "",
+        "## POINTERS",
+        "",
+        "- status: (none stated)",
+        "- linked: #901, #900  (board: #901; journal: #900)",
+        "- deliverables next to this journal: (none)",
+        "- not shown: -0.1 KB of 0.1 KB"
+      ],
+      "tool": "oa-state"
+    }
+  ]
+}

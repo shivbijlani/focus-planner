@@ -1,0 +1,29 @@
+{
+  "files": {},
+  "id": "cmd/doc/101-unbound",
+  "steps": [
+    {
+      "args": {
+        "Id": "101"
+      },
+      "command": "doc",
+      "exit": 0,
+      "json": {
+        "bound": false,
+        "doc_id": null,
+        "doc_url": null,
+        "healed": false,
+        "id": "101",
+        "journal_stamp_mismatch_id": null,
+        "journal_stamped": false,
+        "new_comment_ids": null,
+        "new_comments": 0,
+        "observation": null,
+        "observed_at": null,
+        "seen_comments": 0,
+        "source": "none"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

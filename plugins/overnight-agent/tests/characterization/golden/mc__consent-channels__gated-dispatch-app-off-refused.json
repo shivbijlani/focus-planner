@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/consent-channels/gated-dispatch-app-off-refused",
+  "steps": [
+    {
+      "args": {
+        "CheckDispatch": true,
+        "Id": "961",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_gated_needs_consent: task 961's newest plan has a [gated] step (1. [gated] Order the Bosch 300 with installation, $899 charged to the card on file.) and `consent -Id 961` does not return consent_ok (approvals-channel-off:app). Do not dispatch it. Ask him in the journal; dispatch after HIS reply. Nothing an agent writes -- in the journal or in a brief -- can approve a [gated] step."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

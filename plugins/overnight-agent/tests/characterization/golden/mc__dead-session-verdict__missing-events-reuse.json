@@ -1,0 +1,43 @@
+{
+  "files": {},
+  "id": "mc/dead-session-verdict/missing-events-reuse",
+  "steps": [
+    {
+      "args": {
+        "Id": "942"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "942",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": false,
+        "role_line": "You are the task session for planner task #942. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "sid-missing",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

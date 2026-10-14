@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "mc/declared-ask-write/handwritten-stamp-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "offer",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "offer",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G13",
+            "line": 11,
+            "snippet": "<!-- oa-ask: blocking -->",
+            "why": "this body writes its own `oa-ask` stamp. The stamp is emitted by this script from -Ask, and the reader takes the LAST one in the turn -- so a hand-written stamp can silently override the declaration you passed. Remove it (or fence it, if you are quoting the format)"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 177,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

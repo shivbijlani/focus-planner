@@ -1,0 +1,17 @@
+{
+  "files": {},
+  "id": "mc/write-turn/validate-no-id-text",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "lanes/session-conflict-refused",
+  "steps": [
+    {
+      "args": {
+        "CheckDispatch": true,
+        "Id": "945",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_lane_conflict: task 945 has conflicting lanes (ado, home); no PC works it until he resolves it on the board or in the app. Do not dispatch or bind it."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

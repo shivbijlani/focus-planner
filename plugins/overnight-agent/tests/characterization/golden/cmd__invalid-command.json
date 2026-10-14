@@ -1,0 +1,15 @@
+{
+  "files": {},
+  "id": "cmd/invalid-command",
+  "steps": [
+    {
+      "command": "bogus",
+      "exit": 1,
+      "stderr": [
+        "<PS-PARAM-INVALID:Command>"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

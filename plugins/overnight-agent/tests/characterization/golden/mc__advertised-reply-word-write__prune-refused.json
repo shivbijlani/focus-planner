@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "mc/advertised-reply-word-write/prune-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "blocking",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G16",
+            "line": 9,
+            "snippet": "**Needs from you:** reply **prune**",
+            "why": "this turn offers \"prune\" as a reply, but the consent reader does not accept it, so typing it would do nothing and would be indistinguishable from him declining (#491). Offer a word the reader accepts -- approve, yes, go ahead, lgtm, ship it, do it, proceed, or `merge <N>` -- or use -DisableGuard G16 if you really mean it"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 186,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

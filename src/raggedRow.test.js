@@ -198,7 +198,10 @@ describe('#426 the single-source view must not reimplement the linked-id write',
   })
 
   it('delegates to opChangeLinkedId', () => {
-    expect(src).toMatch(/handleChangeLinkedId[\s\S]{0,600}?ops\.opChangeLinkedId/)
+    const handlerStart = src.indexOf('const handleChangeLinkedId =')
+    const handlerEnd = src.indexOf('\n  const handleLinkToAdoBugDb', handlerStart)
+    expect(handlerStart).not.toBe(-1)
+    expect(src.slice(handlerStart, handlerEnd)).toContain('ops.opChangeLinkedId')
   })
 })
 

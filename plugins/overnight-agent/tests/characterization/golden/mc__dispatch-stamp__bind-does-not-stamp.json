@@ -1,0 +1,77 @@
+{
+  "files": {
+    "state/task-982.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "982",
+        "plan_id": "t982-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "11111111-1111-4111-8111-111111111111",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-982",
+          "workspace_type": "worktree"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/dispatch-stamp/bind-does-not-stamp",
+  "steps": [
+    {
+      "args": {
+        "Id": "982",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "p",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-982",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "<NOW+0m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "982",
+        "kickoff_continuation": null,
+        "kind": "code",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #982. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "11111111-1111-4111-8111-111111111111",
+        "state": "live",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-982\"",
+        "verdict": "reuse",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-982",
+        "workspace_missing": false,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

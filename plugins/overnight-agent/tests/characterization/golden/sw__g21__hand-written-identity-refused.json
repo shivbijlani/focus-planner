@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "sw/g21/hand-written-identity-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G21",
+            "line": 4,
+            "snippet": "<!-- oa-by: session=someone-else host=x -->",
+            "why": "this body writes its own `oa-by` identity stamp. The stamp records which agent wrote the turn and is emitted by this tool from -Author / the session; a hand-written one could claim any author. Remove it (or fence it, if you are quoting the format). This guard cannot be disabled"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 194,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

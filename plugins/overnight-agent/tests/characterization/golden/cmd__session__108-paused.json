@@ -1,0 +1,43 @@
+{
+  "files": {},
+  "id": "cmd/session/108-paused",
+  "steps": [
+    {
+      "args": {
+        "Id": "108"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 2,
+        "concurrency_source": "settings",
+        "created_at": "<NOW-2880m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "108",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": "<NOW-240m>",
+        "model": "auto",
+        "model_source": "settings",
+        "paused_at": "<NOW-120m>",
+        "paused_by_user": true,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": false,
+        "role_line": "You are the task session for planner task #108. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "12121212-3434-4565-8787-909090909090",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "paused",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

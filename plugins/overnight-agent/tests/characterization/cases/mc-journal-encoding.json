@@ -1,0 +1,45 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-journal-encoding"
+  ],
+  "cases": [
+    {
+      "id": "mc/journal-encoding/mark-preserves-nonascii",
+      "note": "mark preserves existing UTF-8 journal bytes and only appends the turn terminator.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 901 | 🟡 | Task 901 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-901.md": "# Task 901: encoding invariant\n\nShiv’s own note — with “curly quotes” and an ‘apostrophe’.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent\n\n<!-- from: overnight-agent -->\n**Status:** In-progress — plan v1 — 2020-03-01\n\nA 🎯 urgency glyph and an em-dash — in the body.\n",
+        "state/task-901.json": {
+          "id": "901",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "bdee26cb02f3130023e2da02b6fa5cbdc46d887552bd4fdf3a49a2cd930c787d",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "901",
+            "Status": "done"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    }
+  ]
+}

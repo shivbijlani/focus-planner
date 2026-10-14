@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/today-served/declaration-cannot-ride-status",
+  "steps": [
+    {
+      "args": {
+        "Exhausted": "gh:197",
+        "Id": "910",
+        "Status": "in-progress"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "-Exhausted is a separate declaration and cannot be combined with -Status/-Version/-PlanId or any timer flag: write the turn first, then declare exhaustion in its own call"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

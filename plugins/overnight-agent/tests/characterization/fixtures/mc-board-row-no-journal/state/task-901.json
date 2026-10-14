@@ -1,0 +1,14 @@
+{
+  "id": "901",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t901-v1",
+  "processed_file_hash": "0b7d34a1a190ba6c56896895f98907fcf0d0bdda2202b5df0be954e0b4a437b2",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "{{NOW-30m}}",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "{{NOW-30m}}",
+  "last_turn_by": "sess-coordinator"
+}

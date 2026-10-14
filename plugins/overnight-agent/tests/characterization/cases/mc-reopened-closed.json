@@ -1,0 +1,60 @@
+{
+  "fixture": "mc-reopened-closed",
+  "covers": [
+    "mutcheck-reopened-closed"
+  ],
+  "cases": [
+    {
+      "id": "mc/reopened-closed/user-completed-done-reported-not-worked",
+      "note": "reply on completed-board done task is reopened_closed and ineligible",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/reopened-closed/user-completed-skip-reported-not-worked",
+      "note": "reply on completed-board skip task is also closed (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/reopened-closed/active-and-proposed-reopen",
+      "note": "active/proposed rows with replies reopen normally",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "Compact": true
+      }
+    },
+    {
+      "id": "mc/reopened-closed/agent-done-on-board-reopens",
+      "note": "agent-declared done on planner.md is not user-closed and is eligible (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/reopened-closed/user-skip-on-board-stays-closed",
+      "note": "explicit user skip on a live board row still suppresses work and reports reopened_closed (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/reopened-closed/remark-does-not-erase-agent-done-reply",
+      "note": "standing unanswered_user survives a re-mark that absorbs the one-shot changed/reopened signal",
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "914",
+            "Status": "done"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan"
+        }
+      ]
+    }
+  ]
+}

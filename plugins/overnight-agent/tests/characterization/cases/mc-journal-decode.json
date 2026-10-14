@@ -1,0 +1,34 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-journal-decode"
+  ],
+  "cases": [
+    {
+      "id": "mc/journal-decode/nonascii-seed-stability",
+      "note": "UTF-8 no-BOM journals with emoji and em dash seed deterministically and scan quiet.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 901 | 🟡 | Task 901 | - | 2020-01-01 | |\n| 902 | 🟡 | Task 902 | - | 2020-01-01 | |\n| 903 | 🟡 | Task 903 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-901.md": "# Task 901: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nPlain ASCII only.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-902.md": "# Task 902: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nPlain ASCII body under moon heading.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-903.md": "# Task 903: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nResult — shipped.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "seed",
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "cmd/decisions/full-scan-refused",
+  "steps": [
+    {
+      "args": {
+        "DecisionNow": "2020-03-01T12:10:00Z",
+        "RunId": "run-x",
+        "ScanFile": "<ROOT>/lad/overnight-agent/full-scan.json"
+      },
+      "command": "decisions",
+      "exit": 1,
+      "stderr": [
+        "decisions_requires_compact_scan: pass the output of `scan -Compact`, which carries summary + rows"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

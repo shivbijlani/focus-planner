@@ -1,10 +1,10 @@
 # Domain: app
 
-The `app` domain is the planner’s React front end plus the pure text-transformation core that keeps `planner.md`, `planner-completed.md`, and `journal/task-XX.md` coherent. It carries nearly all user-facing behaviour: board rendering, journal rendering, task mutation, read/unread state, cross-source combined views, and the editors for agent-facing sidecar files. The design repeatedly chooses **pure functions over UI-local logic** so the single-source board and the Combined view use the same algorithms, not two similar ones. See [Architecture](Architecture), [Data-Formats](Data-Formats), and [Reliability](Reliability).
+The `app` domain is the planner’s React front end plus the pure text-transformation core that keeps `planner.md`, `planner-completed.md`, and `journal/task-XX.md` coherent. It carries nearly all user-facing behaviour: board rendering, journal rendering, task mutation, read/unread state, saved-source switching, and the editors for agent-facing sidecar files. The design keeps board transformations pure and storage-independent. See [Architecture](Architecture), [Data-Formats](Data-Formats), and [Reliability](Reliability).
 
 ## Responsibility
 
-`src/App.jsx` is the composition root. It imports storage, routing, board parsing, journal rendering, read-state, sync diagnostics, and the settings editors, then wires them into views such as `FocusPlanView`, `CombinedFocusPlanView`, `TaskSection`, and `JournalChatView`. The rationale prose lives mostly in the small modules it depends on. `src/focusPlanOps.js` explicitly says its operations stay pure so the same algorithms can be reused “from both the single-source FocusPlanView and the multi-source Combined view”. `src/boardRow.js` narrows the row/header alignment rule to a **single implementation** because “the reader agrees with the writer” only holds by construction. `src/readState/readStateService.js` similarly pushes all unread logic behind a swappable provider so UI code emits events rather than computing signatures itself.
+`src/App.jsx` is the composition root. It imports storage, board parsing, journal rendering, read-state, sync diagnostics, and the settings editors, then wires them into views such as `FocusPlanView`, `TaskSection`, and `JournalChatView`. The rationale prose lives mostly in the small modules it depends on. `src/focusPlanOps.js` keeps board mutations pure and independent of storage. `src/boardRow.js` narrows the row/header alignment rule to a **single implementation** because “the reader agrees with the writer” only holds by construction. `src/readState/readStateService.js` similarly pushes all unread logic behind a swappable provider so UI code emits events rather than computing signatures itself.
 
 ## Principal modules
 
@@ -16,8 +16,8 @@ The `app` domain is the planner’s React front end plus the pure text-transform
 
 | Path | Role | Why it exists |
 | --- | --- | --- |
-| `src/App.jsx` | Main UI composition root. | Centralises view wiring for board, journals, combined routing, sync, diagnostics, settings, and mobile affordances. |
-| `src/focusPlanOps.js` | Pure board mutations. | Keeps add/move/snooze/complete/link operations reusable across views and sources. |
+| `src/App.jsx` | Main UI composition root. | Centralises view wiring for the active board, journals, sync, diagnostics, settings, and mobile affordances. |
+| `src/focusPlanOps.js` | Pure board mutations. | Keeps add/move/snooze/complete/link operations independent of storage. |
 | `src/boardRow.js` | Canonical row/header normalization. | Prevents reader/writer disagreement on ragged `Wake`/`Linked ID` tables. |
 | `src/journalChat.js` | Journal chat parser/appender. | Implements the markdown-to-chat contract without React dependencies. |
 | `src/journalLoadQueue.js` | Ordered, de-duplicated async queue. | Prevents 90+ rows from stampeding cloud storage with journal reads. |
@@ -79,7 +79,7 @@ The strongest contracts come from `src/focusPlanOps.test.js`, `src/boardWakeMigr
 - Reader and writer **must share one row-alignment rule**. `src/raggedRow.test.js` and `src/misfiledLinkedId.test.js` require a trailing field in a short Deferred row to bind to `Linked ID`, not `Wake`, and require a non-date wake value to be recovered into `Linked ID` without inventing a snooze.
 - Journal parsing treats fenced code as **quoted text, not control markup**. `src/journalChat.test.js` requires quoted `<!-- from: me -->` and quoted `## 2026-12-25` examples to stay literal, preventing false authorship and fabricated day grouping.
 - Journal hydration is **bounded and shareable**. `src/journalLoadQueue.test.js` requires concurrency limits, de-duplication by key/provider, cancellation, timeout, and that initial seeding stays open until queued work drains.
-- Read/unread state is **event-driven and source-qualified**. `src/readState/readStateService.test.js` requires journals tracked before initial seeding to count as seen, later-appearing journals to count as unread, `emitJournalOpened()` to clear unread state, and source-qualified IDs to stay independent.
+- Read/unread state is **event-driven and source-qualified**. `src/readState/readStateService.test.js` requires journals tracked before initial seeding to count as seen, later-appearing journals to count as unread, `emitJournalOpened()` to clear unread state, and source-qualified IDs to stay independent when switching saved providers.
 - Live journals with no board row and no tombstone are an error condition. `src/unreachableJournals.test.js` requires the detector to report reachable-vs-unreachable status without flagging completed or deliberately deleted journals.
 
 ## Failure modes

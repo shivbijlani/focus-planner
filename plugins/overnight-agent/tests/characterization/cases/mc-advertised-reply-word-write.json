@@ -1,0 +1,76 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-advertised-reply-word"
+  ],
+  "cases": [
+    {
+      "id": "mc/advertised-reply-word-write/prune-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply **prune** and I'll remove old folders.\n",
+      "note": "G16 refuses the measured unanswerable reply word prune."
+    },
+    {
+      "id": "mc/advertised-reply-word-write/approve-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply **approve** and I'll continue.\n",
+      "note": "Accepted vocabulary word approve is clean."
+    },
+    {
+      "id": "mc/advertised-reply-word-write/merge-number-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply `merge 198` when ready.\n",
+      "note": "Command-shaped merge <N> is accepted."
+    },
+    {
+      "id": "mc/advertised-reply-word-write/emphasis-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Next:** I will **prune** the folders once authorized.\n",
+      "note": "Bold emphasis that is not an offered reply stays clean."
+    },
+    {
+      "id": "mc/advertised-reply-word-write/fenced-prune-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n\n```\n**Needs from you:** reply **prune**\n```\n",
+      "note": "An offered word inside a fenced example is inert."
+    },
+    {
+      "id": "mc/advertised-reply-word-write/disable-g16-clears",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true,
+        "DisableGuard": [
+          "G16"
+        ]
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply **prune** and I'll continue.\n",
+      "note": "-DisableGuard G16 clears the refusal."
+    }
+  ]
+}

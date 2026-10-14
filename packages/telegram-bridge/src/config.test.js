@@ -139,3 +139,22 @@ describe('loadConfig boardPath', () => {
     )
   })
 })
+
+describe('loadConfig ownerUserId', () => {
+  it('parses a positive numeric Telegram sender ID', async () => {
+    const cfg = await loadConfig({
+      env: { ...BASE, TELEGRAM_BRIDGE_OWNER_USER_ID: '12345' },
+    })
+    expect(cfg.ownerUserId).toBe(12345)
+  })
+
+  it.each(['', 'invalid', '0', '-1', '1.5', '9007199254740992'])(
+    'rejects an invalid owner sender ID (%s)',
+    async (ownerUserId) => {
+      const cfg = await loadConfig({
+        env: { ...BASE, TELEGRAM_BRIDGE_OWNER_USER_ID: ownerUserId },
+      })
+      expect(cfg.ownerUserId).toBeNull()
+    },
+  )
+})

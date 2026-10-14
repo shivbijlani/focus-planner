@@ -1,0 +1,62 @@
+{
+  "files": {
+    "state/task-118.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "118",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t118-v1",
+        "processed_file_hash": "04241ebd392b2ae1d09ee59009974a7ba806e96de20698d23d12747d6070e46c",
+        "recheck": {
+          "cadence": "12h",
+          "interval_minutes": 720,
+          "kind": "ci",
+          "last_rechecked": "<NOW+0m>",
+          "next_due": "<NOW+720m>"
+        },
+        "seeded": false,
+        "status": "blocked",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "cmd/mark/118-recheckdone",
+  "steps": [
+    {
+      "args": {
+        "Id": "118",
+        "RecheckDone": true
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "118",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t118-v1",
+        "processed_file_hash": "04241ebd392b2ae1d09ee59009974a7ba806e96de20698d23d12747d6070e46c",
+        "recheck": {
+          "cadence": "12h",
+          "interval_minutes": 720,
+          "kind": "ci",
+          "last_rechecked": "<NOW+0m>",
+          "next_due": "<NOW+720m>"
+        },
+        "seeded": false,
+        "status": "blocked",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

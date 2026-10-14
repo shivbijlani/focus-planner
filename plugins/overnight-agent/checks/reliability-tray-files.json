@@ -1,0 +1,14 @@
+[
+  "oa-supervisor-tray.ps1",
+  "oa-supervisor-startup.ps1",
+  "reliability-supervisor.mjs",
+  "windows-app-actuator.mjs",
+  "session-terminal-evidence.mjs",
+  "consumer-reliability-supervisor.mjs",
+  "oa-user-settings.mjs",
+  "consumer-browser-watchdog.mjs",
+  "browser-watchdog.ps1",
+  "check-browser-slots.ps1",
+  "browser-slot-table.ps1",
+  "consumer-update-check.mjs"
+]

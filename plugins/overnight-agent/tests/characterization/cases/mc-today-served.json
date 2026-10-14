@@ -1,0 +1,309 @@
+{
+  "fixture": "mc-today-served",
+  "covers": [
+    "mutcheck-today-served"
+  ],
+  "cases": [
+    {
+      "id": "mc/today-served/writing-does-not-release",
+      "note": "a recent in-progress Today row keeps Deferred ineligible when there is no declaration",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-30m}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-30m}}",
+          "last_turn_by": "sess-coordinator"
+        }
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/today-served/named-declaration-releases",
+      "note": "a standing named declaration releases Deferred and reports declared_exhausted",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-20m}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-20m}}",
+          "last_turn_by": "sess-coordinator",
+          "today_exhausted": {
+            "at": "{{NOW-5m}}",
+            "examined": [
+              "gh:197",
+              "gh:179"
+            ],
+            "note": "",
+            "today_hash": "299cfab34ba0ae3de1d04fed90e370d91be4895d801251ba1fae2b4d3ed3120a"
+          }
+        }
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/today-served/empty-declaration-refused",
+      "note": "-Exhausted must name what was examined",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-30m}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-30m}}",
+          "last_turn_by": "sess-coordinator"
+        }
+      },
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "910",
+        "Exhausted": " , ; "
+      }
+    },
+    {
+      "id": "mc/today-served/declaration-cannot-ride-status",
+      "note": "-Exhausted cannot be combined with -Status in the same mark call",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-30m}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-30m}}",
+          "last_turn_by": "sess-coordinator"
+        }
+      },
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "910",
+        "Status": "in-progress",
+        "Exhausted": "gh:197"
+      }
+    },
+    {
+      "id": "mc/today-served/unworked-row-refuses-exhaustion",
+      "note": "a row not worked this run cannot be declared exhausted",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "2020-03-01T12:00:00Z",
+          "last_turn_by": "sess-coordinator"
+        }
+      },
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "910",
+        "Exhausted": "gh:197"
+      }
+    },
+    {
+      "id": "mc/today-served/strict-rollback-holds",
+      "note": "TodayGateStrict ignores a standing declaration and keeps Deferred ineligible",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-20m}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-20m}}",
+          "last_turn_by": "sess-coordinator",
+          "today_exhausted": {
+            "at": "{{NOW-5m}}",
+            "examined": [
+              "gh:197",
+              "gh:179"
+            ],
+            "note": "",
+            "today_hash": "299cfab34ba0ae3de1d04fed90e370d91be4895d801251ba1fae2b4d3ed3120a"
+          }
+        }
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "TodayGateStrict": true,
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/today-served/backstop-releases-stale-turn",
+      "note": "stale last_turn_at releases through stale_turn_backstop without a declaration",
+      "fixture": "mc-today-served-hand",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-7h}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-7h}}",
+          "last_turn_by": "sess-coordinator",
+          "today_exhausted": null
+        }
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/today-served/settings-backstop-holds",
+      "note": "Today gate backstop from user-settings (12h) holds an 8h-old turn that the default would release",
+      "fixture": "mc-today-served-hand",
+      "files": {
+        "data/user-settings.md": "# settings\n\n| Setting | Value |\n| --- | --- |\n| Today gate backstop | `12h` |\n",
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-8h}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-8h}}",
+          "last_turn_by": "sess-coordinator",
+          "today_exhausted": null
+        }
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/today-served/explicit-backstop-outranks-file",
+      "note": "explicit TodayGateBackstopHours wins over user-settings",
+      "fixture": "mc-today-served-hand",
+      "files": {
+        "data/user-settings.md": "# settings\n\n| Setting | Value |\n| --- | --- |\n| Today gate backstop | `2h` |\n",
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-8h}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-8h}}",
+          "last_turn_by": "sess-coordinator",
+          "today_exhausted": null
+        }
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "TodayGateBackstopHours": 999,
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/today-served/reply-beats-declaration",
+      "note": "a live reply beats a standing declaration and holds the gate as holding:reopened",
+      "files": {
+        "state/task-910.json": {
+          "id": "910",
+          "status": "in-progress",
+          "version": 1,
+          "plan_id": "t910-v1",
+          "processed_file_hash": "eacd504ffaa5acd3d8804b6308175f87a2db4880a7843e2300c2c3a27075c588",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "{{NOW-20m}}",
+          "status_by": "agent",
+          "unanswered_user_message_at": null,
+          "last_turn_at": "{{NOW-20m}}",
+          "last_turn_by": "sess-coordinator",
+          "today_exhausted": {
+            "at": "{{NOW-5m}}",
+            "examined": [
+              "gh:197",
+              "gh:179"
+            ],
+            "note": "",
+            "today_hash": "299cfab34ba0ae3de1d04fed90e370d91be4895d801251ba1fae2b4d3ed3120a"
+          }
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-910.md": "\n## 2020-03-02\n\n<!-- from: me -->\nactually this first\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "ExhaustionTtlMinutes": 120,
+            "ScanOutFile": "{cwd}\\worklist.json"
+          }
+        }
+      ]
+    }
+  ]
+}

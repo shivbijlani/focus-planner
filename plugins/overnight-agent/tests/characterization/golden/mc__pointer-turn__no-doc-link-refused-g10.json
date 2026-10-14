@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/pointer-turn/no-doc-link-refused-g10",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Id": "940",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "blocking",
+        "docBound": true,
+        "docId": "DOC1234567890abcdefghijklmnopqrstuvwxyz",
+        "findings": [
+          {
+            "guard": "G10",
+            "line": 1,
+            "snippet": "docId=DOC1234567890abcdefghijklmnopqrstuvwxyz",
+            "why": "this turn is a pointer with nothing to point at -- it never links the catch-up doc it is summarising, so the detail has left the journal and cannot be reached from it. Include the doc URL (or its id) in the turn"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "940",
+        "length": 220,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

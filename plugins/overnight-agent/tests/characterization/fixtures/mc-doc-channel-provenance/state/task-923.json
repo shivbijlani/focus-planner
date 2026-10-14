@@ -1,0 +1,14 @@
+{
+  "id": "923",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t923-v1",
+  "processed_file_hash": "988ec7b1a11ba2d98561b77a100ddccde7c67f7659b4096c0027e357e33b4263",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-01-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-01-01T12:00:00Z",
+  "last_turn_by": "sess-char"
+}

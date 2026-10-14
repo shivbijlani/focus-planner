@@ -1,0 +1,4 @@
+# Fixtures and goldens are byte-exact test data: never let git rewrite their line endings
+# (a CRLF journal is itself a fixture, and write-turn preserves a journal's newline style).
+fixtures/** -text
+golden/** -text

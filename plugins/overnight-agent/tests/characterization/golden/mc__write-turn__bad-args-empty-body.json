@@ -1,0 +1,14 @@
+{
+  "files": {},
+  "id": "mc/write-turn/bad-args-empty-body",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "exit": 1,
+      "tool": "write-turn"
+    }
+  ]
+}

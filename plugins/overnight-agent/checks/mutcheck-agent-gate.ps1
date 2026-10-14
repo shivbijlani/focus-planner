@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-agent-gate.ps1 -- mutation check for the agent gate (#297).
 
   THE BUG THIS GUARDS
@@ -75,14 +75,27 @@ $ErrorActionPreference = 'Stop'
 # Default to the installed skill's oa-state.ps1 when run by hand; run-sweeps.ps1 passes
 # -ScriptPath explicitly so the nightly sweep guards the PRODUCTION copy, not the repo's.
 if (-not $ScriptPath) {
-  $candidates = @(
-    (Join-Path $PSScriptRoot '..\skills\overnight-agent\oa-state.ps1'),
-    (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1'),
-    "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1"
-  )
+  # The repo copy first, then the two installed locations. The installed ones are built ONLY on
+  # Windows: `$env:LOCALAPPDATA` and `$env:USERPROFILE` are null elsewhere, and `Join-Path` with
+  # a null root is a binding error that throws before the repo candidate is ever tried -- so on
+  # Linux this failed with "Cannot bind argument to parameter 'Path' because it is null" while
+  # the file it wanted was sitting right there. Guarded rather than wrapped in a try, because a
+  # swallowed throw here would silently test whichever copy happened to resolve.
+  $candidates = @((Join-Path $PSScriptRoot '..\skills\overnight-agent\oa-state.ps1'))
+  if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1') }
+  if ($env:USERPROFILE) { $candidates += (Join-Path $env:USERPROFILE '.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1') }
   foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $ScriptPath
+
+# The host to launch children with. `powershell` exists only on Windows, so hardcoding it made
+# every arm fail on Linux with "The term 'powershell' is not recognized" -- a harness that cannot
+# run at all, reported as twelve broken guarantees. Under pwsh this is pwsh itself, so the suite
+# runs in CI; under Windows PowerShell it stays `powershell`, which is how the skill invokes
+# these scripts in production.
+$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 
 # --- fixture material ---------------------------------------------------------------------
 # The rules below are the live gate's, VERBATIM. They are quoted rather than paraphrased on
@@ -294,26 +307,30 @@ $arms = [ordered]@{
     )
   }
   'H-gate-allowed-surfaces-human'    = @{
-    why     = 'a gate verdict still REPORTS whether a human is waiting below the turn (#302)'
+    why     = 'a gate allowance REFUSES while a human is waiting below the turn (#302)'
     gate    = (New-Gate -Allow @($RULE_EMAIL_SELF) -Ask @($FLOOR_MANY))
     entries = @()
     queries = @(
-      # Both halves are `gate-allowed` -- the verdict must NOT move. Only the reported fact does.
-      # A field that is always true is the same failure as no field, so the arm asserts both.
+      # #302's consumer half. The data half shipped with #300 and this arm pinned it; reporting
+      # alone left the refusal as two sentences of SKILL.md prose, which is the shape that failed
+      # in #272, #297 and #301. So an allowance with unread human text below the turn is now its
+      # OWN verdict and reports `consent_ok: false` -- a caller that ignores the new reason still
+      # stops, which is what makes it mechanical rather than advisory.
       @{ args = @('-Action', 'send_email_self'); entries = @($HumanWaiting)
-        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $true }
+        expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; trailing_has_user = $true }
       }
+      # The no-fresh-reply case is UNCHANGED, which is this issue's second success criterion.
       @{ args = @('-Action', 'send_email_self'); entries = @()
         expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
       }
       # And it must be the FAIL-OPEN reader: unmarked prose below the turn is somebody, and the
       # cost of being wrong here is one pause, not a merge over a refusal.
       @{ args = @('-Action', 'send_email_self'); entries = @($UnmarkedWaiting)
-        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $true }
+        expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; trailing_has_user = $true }
       }
-      # Fail-open does NOT mean "any text at all". The two identifiable MACHINE shapes read false,
-      # which is what bounds the #302 consumer's blast radius: neither the agent's own unstamped
-      # turn nor a sibling skill's can masquerade as a human changing his mind.
+      # Fail-open does NOT mean "any text at all", and these two are what bound the blast radius:
+      # neither the agent's own unstamped turn nor a sibling skill's can masquerade as a human
+      # changing his mind and pause a run. Without them this guard would stall on its own output.
       @{ args = @('-Action', 'send_email_self'); entries = @($AgentTurnNoMarker)
         expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
       }
@@ -321,6 +338,17 @@ $arms = [ordered]@{
         expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
       }
     )
+  }
+  'N-gate-never-written'             = @{
+    why     = 'the gate file is READ, never written -- the one-way property the channel rests on (#326)'
+    gate    = (New-Gate -Allow @($RULE_YOLO_THIS_REPO) -Ask @($FLOOR_MANY))
+    entries = @()
+    # The read-only check runs its own command surface (see Test-GateUnwritten); this query is
+    # here so the arm also behaves like every other arm rather than being a special case.
+    queries = @(
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'gate-allowed' } }
+    )
+    readOnly = $true
   }
   'I-floor-outcome-phrasing'         = @{
     why     = 'a floor rule naming the OUTCOME binds, instead of matching nothing and being inert'
@@ -365,10 +393,18 @@ $arms = [ordered]@{
     queries    = @(
       # The headline. Rule 1 names another repo; rule 4 covers creating, not merging.
       @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'human-authored-affirmative'; gate_rule = $null } }
-      @{ args = @('-Action', 'open_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_CREATE_PR } }
-      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner-ado-codeapp'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_YOLO_REPO } }
-      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_EMAIL_SELF } }
-      @{ args = @('-Action', 'send_email_reply'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_REPLY } }
+      # #302: these four are gate ALLOWANCES with his text sitting below the turn, so they now
+      # refuse. Worth being explicit that the text here is an APPROVAL, not a refusal -- and it
+      # still pauses. That is deliberate: reading what he meant is #301's vocabulary problem and
+      # this issue's stated non-goal, so the question asked is only "has he spoken since". The
+      # cost is one pause, it clears the moment a turn answers him, and the alternative is a
+      # reader that decides for itself which of his sentences count.
+      @{ args = @('-Action', 'open_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_CREATE_PR } }
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner-ado-codeapp'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_YOLO_REPO } }
+      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_EMAIL_SELF } }
+      @{ args = @('-Action', 'send_email_reply'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_REPLY } }
+      # THE FLOOR IS UNTOUCHED. #302 only ever narrows an allow; it can never turn a floor block
+      # into permission, and these two prove the floor still reports its own reason and rule.
       @{ args = @('-Action', 'send_email_many'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_MANY } }
       @{ args = @('-Action', 'send_email_new_thread'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_FRESH } }
     )
@@ -413,7 +449,16 @@ function Invoke-Child {
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
-    $raw = (& powershell @ChildArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $fileIndex = [Array]::IndexOf($ChildArgs, '-File')
+    if ($fileIndex -ge 0 -and $ChildArgs.Count -gt ($fileIndex + 1)) {
+      $target = $ChildArgs[$fileIndex + 1]
+      $oaArgs = @()
+      if ($ChildArgs.Count -gt ($fileIndex + 2)) { $oaArgs = @($ChildArgs[($fileIndex + 2)..($ChildArgs.Count - 1)]) }
+      $cmd = Get-OaStateCommand $target
+      $raw = (& $cmd.Exe @($cmd.Prefix + $oaArgs) 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    } else {
+      $raw = (& $script:PsExe @ChildArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    }
     $code = $LASTEXITCODE
   }
   finally { $ErrorActionPreference = $prev }
@@ -422,7 +467,7 @@ function Invoke-Child {
 
 function Invoke-Arm {
   param([string]$Script, [string]$Name, $Arm, [string]$GateOverride, [bool]$HasGateOverride)
-  $root = Join-Path $env:TEMP ("oa-gate-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-gate-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
   $jdir = Join-Path $root 'journal'
   $sdir = Join-Path $root 'state'
   $gpath = Join-Path $root 'agent-gate.md'
@@ -506,11 +551,84 @@ function Test-Arm {
         }
       }
     }
+    if ($Arm.readOnly) {
+      # #326: the gate file is never WRITTEN. That property is the entire reason `agent-gate.md`
+      # can be trusted without an attribution marker -- if this script could write it, the agent
+      # could grant itself a standing permission, and the gate would be worth exactly as much as
+      # the journal prose #227 taught us not to trust.
+      #
+      # THE VACUOUS-PASS TRAP, which this arm is shaped to avoid. The obvious implementation is
+      # "hash before, hash after, assert equal" -- and that passes when the file does not exist,
+      # because no-file and no-file hash to the same nothing. The arm would go green and STAY
+      # green while the property rotted, in a suite whose whole value is that a green arm means
+      # something. So existence is asserted POSITIVELY on both sides, and the content is pinned
+      # to a known value rather than merely to itself.
+      $fail += Test-GateUnwritten -Script $Script -Notes ([ref]$notes)
+    }
   }
   if (-not $Quiet) {
     Write-Host ("{0,-34} {1,-6} {2}" -f $Name, $(if ($fail -eq 0) { 'PASS' } else { 'FAIL' }), $Arm.why)
     foreach ($n in $notes) { Write-Host $n }
   }
+  return $fail
+}
+
+function Test-GateUnwritten {
+  # #326. Returns a failure count and appends notes. Seeds a REAL gate, runs the full command
+  # surface against it, and asserts the file is still there and still byte-identical.
+  param([string]$Script, [ref]$Notes)
+  $fail = 0
+  $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-ro-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  $jdir = Join-Path $root 'journal'
+  $sdir = Join-Path $root 'state'
+  $gpath = Join-Path $root 'agent-gate.md'
+  New-Item -ItemType Directory -Path $jdir -Force | Out-Null
+  New-Item -ItemType Directory -Path $sdir -Force | Out-Null
+  try {
+    # A gate that produces BOTH verdicts, because those are the two paths most likely to want to
+    # record something: an allow that might cache "granted", a floor block that might log a
+    # refusal. A gate that only ever denies would exercise half the surface.
+    $gateText = (New-Gate -Allow @($RULE_YOLO_THIS_REPO) -Ask @($FLOOR_MANY))
+    [IO.File]::WriteAllText($gpath, $gateText, [Text.UTF8Encoding]::new($false))
+    New-Journal -Dir $jdir -Id '972' -Entries @()
+
+    # POSITIVE EXISTENCE, BEFORE. Without this the whole arm is satisfiable by absence.
+    if (-not (Test-Path -LiteralPath $gpath -PathType Leaf)) {
+      $Notes.Value += '  x read-only: the seeded gate does not exist, so this arm would prove nothing'
+      return 1
+    }
+    $before = [IO.File]::ReadAllBytes($gpath)
+    if ($before.Length -eq 0) {
+      $Notes.Value += '  x read-only: the seeded gate is empty, so equality would be vacuous'
+      return 1
+    }
+
+    $common = @('-JournalDir', $jdir, '-StateDir', $sdir, '-GatePath', $gpath)
+    $surface = @(
+      @('gate'),
+      @('scan'),
+      @('get', '-Id', '972'),
+      @('consent', '-Id', '972'),
+      @('consent', '-Id', '972', '-Action', 'merge_pr', '-Repo', 'focus-planner'),   # gate-allowed
+      @('consent', '-Id', '972', '-Action', 'send_email_many'),                      # gate-floor-blocks
+      @('mark', '-Id', '972', '-Status', 'in-progress')
+    )
+    foreach ($cmd in $surface) {
+      [void](Invoke-Child -ChildArgs (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $cmd + $common))
+      # Checked after EVERY command rather than once at the end, so a failure names the command
+      # that wrote. "Something in these seven wrote the gate" is a much worse bug report.
+      if (-not (Test-Path -LiteralPath $gpath -PathType Leaf)) {
+        $fail++; $Notes.Value += "  x read-only: [$($cmd -join ' ')] DELETED the gate file"
+        break
+      }
+      $after = [IO.File]::ReadAllBytes($gpath)
+      if ($after.Length -ne $before.Length -or [Convert]::ToBase64String($after) -ne [Convert]::ToBase64String($before)) {
+        $fail++; $Notes.Value += "  x read-only: [$($cmd -join ' ')] WROTE the gate file"
+        break
+      }
+    }
+  }
+  finally { Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue }
   return $fail
 }
 
@@ -535,11 +653,11 @@ if ($baselineFailures.Count -gt 0) { Write-Host ""; Write-Host "BASELINE FAILED"
 # --- advisory: what does the gate on THIS machine actually authorise? ------------------------
 # Never fatal. The user owns this file and may change it whenever he likes; a check that went
 # red on his edit would be crying wolf. This just states the current answer out loud.
-$livePath = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\agent-gate.md"
-if (Test-Path $livePath) {
+$livePath = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'OneDrive\Apps\Focus Planner\agent-gate.md' } else { $null }
+if ($livePath -and (Test-Path $livePath)) {
   Write-Host ""
   Write-Host "=== ADVISORY: the gate file on this machine (never fatal) ==="
-  $tmp = Join-Path $env:TEMP ("oa-gate-live-" + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("oa-gate-live-" + [guid]::NewGuid().ToString('N').Substring(0, 6))
   New-Item -ItemType Directory -Path $tmp -Force | Out-Null
   try {
     New-Journal -Dir $tmp -Id '970' -Entries @()
@@ -578,6 +696,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('foreach ($stage in $stages) {'), 'foreach ($stage in ($stages[1], $stages[0])) {'
     }
+    nodeFind = 'for (const stage of stages) {'
+    nodeReplace = 'for (const stage of [stages[1], stages[0]]) {'
   },
   @{
     name  = 'M2: a floor verdict no longer short-circuits, so a journal `approve` overrides it'
@@ -588,6 +708,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape("if (`$verdict.decision -ne 'none') {"), "if (`$verdict.decision -eq 'allow') {"
     }
+    nodeFind = "if (verdict.decision !== 'none') {"
+    nodeReplace = "if (verdict.decision === 'allow') {"
   },
   @{
     name  = 'M3: repo matching by SUBSTRING, so a prefix repo collects another repo''s grant'
@@ -596,6 +718,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('if ($t -eq $want -or $t -eq $wantBare) { $hit = $true; break }'), 'if ($t.Contains($want) -or $t.Contains($wantBare)) { $hit = $true; break }'
     }
+    nodeFind = 'if (lowerInvariant(t) === lowerInvariant(want) || lowerInvariant(t) === lowerInvariant(wantBare)) { hit = true; break; }'
+    nodeReplace = 'if (lowerInvariant(t).includes(lowerInvariant(want)) || lowerInvariant(t).includes(lowerInvariant(wantBare))) { hit = true; break; }'
   },
   @{
     name  = 'M4: merge_pr accepts CREATE verbs, so "creating a PR is fine" authorises merging'
@@ -604,6 +728,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape("merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bauto-?merges?\b|\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\b')"), "merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bcreat(?:e|es|ed|ing)\b|\bpublish(?:es|ed|ing)?\b')"
     }
+    nodeFind = "merge_pr: ['\\bmerg(?:e|es|ed|ing)\\b|\\bauto-?merges?\\b|\\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\\b'],"
+    nodeReplace = "merge_pr: ['\\bmerg(?:e|es|ed|ing)\\b|\\bcreat(?:e|es|ed|ing)\\b|\\bpublish(?:es|ed|ing)?\\b'],"
   },
   @{
     name  = 'M5: an ABSENT gate file yields a permissive default instead of no rules'
@@ -617,6 +743,8 @@ $mutations = @(
     return [pscustomobject]$result
   }'
     }
+    nodeFind = 'if (!isLeaf) return result;'
+    nodeReplace = "if (!isLeaf) { result.allow = ['yolo mode, dont ask just do']; return result; }"
   },
   @{
     name  = 'M6: -Action is free text again (ValidateSet dropped)'
@@ -629,6 +757,8 @@ $mutations = @(
     'post_public', 'spend_money', 'delete_data', 'deploy', 'publish_release')]
   [string]`$Action,"), "  [string]`$Action,"
     }
+    nodeFind = "  { name: 'Action', type: S, set: ACTIONS }, { name: 'Repo', type: S },"
+    nodeReplace = "  { name: 'Action', type: S }, { name: 'Repo', type: S },"
   },
   @{
     name  = 'M10: outcome-shaped floor vocabulary dropped (a floor naming the OUTCOME goes inert)'
@@ -640,6 +770,8 @@ $mutations = @(
       # YOLO grant below it wins.
       $s -replace [regex]::Escape('  if ($allowOutcomePhrasing) {'), '  if ($false) {'
     }
+    nodeFind = '  if (allowOutcomePhrasing) {'
+    nodeReplace = '  if (false) {'
   },
   @{
     name  = 'M11: outcome vocabulary applied to the ALLOW list too (it starts GRANTING)'
@@ -650,6 +782,8 @@ $mutations = @(
       # licence to cause one.
       $s -replace [regex]::Escape("Scoped = `$true; Outcome = `$false }"), "Scoped = `$true; Outcome = `$true }"
     }
+    nodeFind = "    { Decision: 'allow', List: 'allow', Rules: [...(gate?.allow ?? [])], Scoped: true, Outcome: false },"
+    nodeReplace = "    { Decision: 'allow', List: 'allow', Rules: [...(gate?.allow ?? [])], Scoped: true, Outcome: true },"
   },
   @{
     name  = 'M7: the gate is consulted even when -Action is omitted (output shape changes)'
@@ -661,6 +795,8 @@ $mutations = @(
     $gate = Read-AgentGate $GatePath'
       $out -replace [regex]::Escape('if ($Action) { Add-GateFallthrough $out $gate }'), 'Add-GateFallthrough $out $gate'
     }
+    nodeFind = "  if (Action) addGateFallthrough(ctx, out, gate);`r`n  ctx.emitJson(out, { depth: 4 });"
+    nodeReplace = "  addGateFallthrough(ctx, out, gate);`r`n  ctx.emitJson(out, { depth: 4 });"
   },
   # M8 and M9 are the two halves of the same guarantee and BOTH name arm H, which is allowed:
   # the aim check requires each mutation to be caught by exactly one arm, not each arm to have
@@ -673,32 +809,95 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '# mutated: never look'
     }
+    nodeFind = 'if (testPath(p)) trailingHasUser = !!getJournalFacts(p).HasTrailingUser;'
+    nodeReplace = '// mutated: never look'
   },
   @{
     name  = 'M9: the gate path reports trailing_has_user as always TRUE (the field says nothing)'
+    # BROAD BY CONSTRUCTION SINCE #302, and the breadth is the point rather than a weakness.
+    # While the field only REPORTED, an always-true mutant was invisible except to the one arm
+    # that read it -- which is exactly why it was pinned to H alone. Now the field DECIDES: an
+    # allowance with a human waiting refuses, so a mutant claiming "someone is always waiting"
+    # turns every gate allowance in the suite into a refusal.
+    #
+    # H remains the OWNER, and the rest are declared structural rather than added to `kills`.
+    # That is the mechanism this harness already provides, and it is not a formatting choice:
+    # the aim check requires exactly ONE owner arm, so a multi-arm `kills` string can never
+    # match and would report MISAIMED forever with identical expected and actual lists.
+    # `alsoCaughtBy` is how a mutation whose blast radius is a property of the DESIGN is
+    # declared, which is exactly what this is -- every gate allowance now consults the field,
+    # so every allow arm is sensitive to it by construction, not by duplicated testing.
     kills = 'H-gate-allowed-surfaces-human'
+    alsoCaughtBy = @('C-repo-scope', 'D-create-is-not-merge', 'F-enum-validation', 'I-floor-outcome-phrasing', 'N-gate-never-written')
     apply = {
       param($s)
       $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '$trailingHasUser = $true'
     }
+    nodeFind = 'if (testPath(p)) trailingHasUser = !!getJournalFacts(p).HasTrailingUser;'
+    nodeReplace = 'trailingHasUser = true;'
+  }
+  @{
+    # THE CONSUMER HALF ITSELF (#302). Without this mutant the guard could be deleted outright
+    # and the suite would stay green: M8/M9 mutate the DATA, and the data half shipped with #300
+    # and was already pinned. Reporting the fact while acting on it anyway is precisely the state
+    # this issue was filed to end, so the mutant deletes the decision and keeps the report.
+    name  = 'M12: the gate allows anyway while a human is waiting (the report is decorative)'
+    # Measured: only H counts the kill. L-live-gate-merge-finding also changes under this mutant,
+    # but it is `diagnostic = $true` -- a report on the real gate file rather than a pass/fail
+    # arm -- so the harness does not credit it. Naming it here would be an over-claim.
+    kills = 'H-gate-allowed-surfaces-human'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('$humanSpoke = ($verdict.decision -eq ''allow'') -and $trailingHasUser'), '$humanSpoke = $false'
+    }
+    nodeFind = "const humanSpoke = verdict.decision === 'allow' && trailingHasUser;"
+    nodeReplace = 'const humanSpoke = false;'
+  }
+  @{
+    # THE MUTANT IS SHAPED LIKE A HELPFUL EDIT, NOT LIKE SABOTAGE (#326). Nobody will submit a PR
+    # that writes to the gate on purpose; someone will absolutely submit one that tidies it while
+    # reading it. So the mutation is a `last_read` stamp appended after a successful parse --
+    # which reads as an improvement in review, and silently destroys the one-way property that is
+    # the entire reason `agent-gate.md` needs no attribution marker (#227).
+    name  = 'M13: Read-AgentGate stamps a last_read marker back into the gate (a helpful edit)'
+    kills = 'N-gate-never-written'
+    # E is a STRUCTURAL consequence, not a duplicated test. Appending to a path that does not
+    # exist CREATES it, so a gate the user never wrote springs into being mid-read -- and arm E
+    # asserts that an absent gate stays absent and grants nothing. That it fires here is the
+    # same property from the other side, and is worth keeping visible rather than narrowing the
+    # mutant to dodge it.
+    alsoCaughtBy = @('E-absent-file-fail-closed')
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('$result.mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString(''o'')'),
+        ('$result.mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString(''o''); ' +
+         '[IO.File]::AppendAllText($path, "<!-- last_read -->")')
+    }
+    nodeFind = "    result.mtime = PsDate.fromInstant(fs.statSync(p).mtimeMs, 'Utc').format('o');"
+    nodeReplace = "    result.mtime = PsDate.fromInstant(fs.statSync(p).mtimeMs, 'Utc').format('o'); fs.appendFileSync(p, '<!-- last_read -->');"
   }
 )
 
-$mutDir = Join-Path $env:TEMP ("oa-gate-mut-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$mutDir = Join-Path ([IO.Path]::GetTempPath()) ("oa-gate-mut-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $mutDir -Force | Out-Null
 $killed = 0; $survived = 0; $misaimed = 0
 try {
   foreach ($m in $mutations) {
     Write-Host ""
     Write-Host "--- $($m.name)"
-    $mutated = & $m.apply $src
-    if ($mutated -eq $src) {
-      Write-Host "  !! mutation did not apply (anchor text moved) -- treating as SURVIVED"
-      $survived++
-      continue
+    if ($script:TargetIsNode) {
+      $safeName = [regex]::Replace($m.name, '[^A-Za-z0-9_.-]', '_')
+      $path = New-OaStateMutant $ScriptPath $safeName $m.nodeFind $m.nodeReplace $mutDir
+    } else {
+      $mutated = & $m.apply $src
+      if ($mutated -eq $src) {
+        Write-Host "  !! mutation did not apply (anchor text moved) -- treating as SURVIVED"
+        $survived++
+        continue
+      }
+      $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
+      [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
     }
-    $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
-    [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
 
     $failedArms = @()
     try { $failedArms = Test-AllArms -Script $path -Label $m.name -Quiet }

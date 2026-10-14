@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "mc/snooze-write/store-snoozed-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "9406"
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G22 line 1: task 9406 is snoozed until <DATE+3d> by snooze.json, and a snoozed task gets no agent turn until that date has passed. Snooze is the executable eligibility floor: no plan, execution, board edit, or journal edit is allowed while it is active, even when the journal has a fresh human reply. This guard cannot be disabled",
+        "      | snooze_until=<DATE+3d>"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

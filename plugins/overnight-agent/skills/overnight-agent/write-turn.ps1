@@ -122,6 +122,20 @@
     write-turn.ps1 -BodyFile turn.md -Ask none -Validate           # lint any turn text
 
   Exit codes: 0 ok - 2 guard violation (nothing written) - 3 bad arguments.
+
+  THE NODE PORT IS THE TOOL NOW (item 3). `write-turn.mjs` beside this file is what SKILL.md
+  invokes; this script is kept, with identical behaviour, as the fallback for a host without Node.
+  Change both or neither -- tests/characterization pins them to the same goldens.
+
+  IDENTITY, AND THE FILES NO AGENT WRITES (item 3, sanctioned write tool)
+  Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its `oa-ask` stamp,
+  so which agent wrote a turn, and from which machine, is in the journal itself. G21 refuses a body
+  that writes its own; G20 refuses any target other than this task's journal inside -JournalDir
+  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. G24
+  refuses a task the user closed (Test-UserClosed), even with a reply below it. G23
+  refuses a coordinator-authored outcome turn on a task whose journal currently carries a human
+  approval. The coordinator must dispatch; the bound task session writes the outcome. None can be
+  disabled.
 #>
 [CmdletBinding()]
 param(
@@ -184,7 +198,31 @@ $DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>
 # guard whose evidence can only be produced by writing into the real OA home is a guard that
 # cannot be tested in CI - which is how it ends up unverified (#461's lesson, applied here
 # before it bites rather than after).
-$OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME } else { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
+$OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME }
+           elseif ($env:OVERNIGHT_AGENT_HOME) { $env:OVERNIGHT_AGENT_HOME }
+           else { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
+
+# --- Sandbox mode (tests/e2e/run-sandbox.ps1). Inert unless the variables are set. -----------
+# OVERNIGHT_AGENT_PLANNER_DIR replaces the default journal folder (an explicit -JournalDir still
+# wins), and OA_SANDBOX_ROOT makes any resolved path outside the sandbox a hard error, so an
+# end-to-end run can never write a live journal. Same contract as oa-state.ps1's block.
+if ($env:OVERNIGHT_AGENT_PLANNER_DIR -and -not $PSBoundParameters.ContainsKey('JournalDir')) {
+  $JournalDir = Join-Path $env:OVERNIGHT_AGENT_PLANNER_DIR 'journal'
+}
+if ($env:OA_SANDBOX_ROOT) {
+  $sbRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+    [Environment]::ExpandEnvironmentVariables($env:OA_SANDBOX_ROOT)).TrimEnd('\', '/')
+  foreach ($pair in @(@('JournalDir', $JournalDir), @('OA home', $OA_HOME), @('BodyFile', $BodyFile))) {
+    if (-not $pair[1]) { continue }
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+      [Environment]::ExpandEnvironmentVariables($pair[1])).TrimEnd('\', '/')
+    $inside = [string]::Equals($full, $sbRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $full.StartsWith($sbRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+    if (-not $inside) {
+      [Console]::Error.WriteLine("oa_sandbox_violation: $($pair[0]) '$full' is outside OA_SANDBOX_ROOT '$sbRoot'"); exit 3
+    }
+  }
+}
 
 # --- #635 the already-shipped pick -------------------------------------------------------
 # Where the shipped/unworked classifier lives. Resolved relative to THIS script, not to the
@@ -194,11 +232,27 @@ $OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME } else { Join-
 # from there; this only has to find the file.
 $script:IssueResolver = if ($env:WRITE_TURN_ISSUE_RESOLVER) { $env:WRITE_TURN_ISSUE_RESOLVER }
                         else { [IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'issue-shipped.mjs') }
+$script:OaStatePs1 = [IO.Path]::Combine($PSScriptRoot, 'oa-state.ps1')
+
+# --- #627 the user pause, read on the WRITE side -----------------------------------------
+# Kept in step with `$script:PausedStatus` in oa-state.ps1, which is derived there as
+# NonWorkableStatus minus ClosedStatus. Written out literally rather than recomputed, because
+# this script has neither set -- and pinned against oa-state's derivation by an arm in
+# mutcheck-user-pause-write.ps1, so the two cannot drift apart unnoticed.
+#
+# `done`/`skip` are deliberately NOT here. They are CLOSED, not paused, and the turn that
+# reports a task finished is legitimately written to a row that has just been marked done.
+$script:PausedStatusWT = @('proposed', 'blocked')
 
 # Set by G15 when it could not classify. Printed as an advisory rather than swallowed,
 # because the defect class this whole guard belongs to is a check that cannot see reporting
 # the same shape as a check that looked and found nothing (#520, #632).
 $script:G15Note = $null
+
+# Set by G17 when the task's state file exists but could not be read. Same rule as G15Note:
+# a guard that could not look says so rather than passing quietly.
+$script:PauseAdvisory = $null
+$script:PauseVerdict = $null
 
 # --- #473 one-turn-per-wake ------------------------------------------------------------
 # A managed agent turn heading. Deliberately the SAME shape oa-state.ps1's ManagedHeadingRe
@@ -224,6 +278,15 @@ $WAKE_WINDOW_MIN = [int]($env:WRITE_TURN_WAKE_WINDOW_MIN | ForEach-Object { if (
 # contains neither `AUTO` nor `AGENT` as a word: `AGENT_SENTINEL_RE` (/^<!--.*\b(AUTO|AGENT)\b.*-->/i)
 # would otherwise read the stamp as an agent-block marker and change how the thread renders.
 $script:AskValues = @('blocking', 'offer', 'none')
+
+# --- #491 the advertised reply word ------------------------------------------------------
+# Kept character-for-character in step with `$script:ConsentAffirmRe` in oa-state.ps1, for the
+# reason every other duplicated pattern in this file states: a looser copy here blesses a word
+# the reader will reject, a stricter one refuses a word it would have accepted, and either way
+# the two disagree silently. `mutcheck-consent-vocab-drift.ps1` already pins that reader
+# against SKILL.md; G16 below pins the EMITTED TURN against this copy, which is the surface
+# nothing was checking.
+$script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go ahead|go for it|go|lgtm|ship it|do it|vibe it|send it|make it so|proceed|merge[ \t]+#?\d+)(?![\w-])'
 # `[ \t\r]*$` for the reason oa-state.ps1's copy spells out: under `(?m)` .NET anchors `$` before
 # the `\n`, so a CRLF line leaves the `\r` unmatched and the pattern silently never fires. Journals
 # are commonly CRLF here.
@@ -231,8 +294,24 @@ $script:AskDeclRe = '(?im)^[ \t]*<!--[ \t]*oa-ask[ \t]*:[ \t]*([a-z]+)[ \t]*-->[
 # Matches the marker the reader anchors the newest turn on, so the stamp lands INSIDE that turn.
 $script:ProvenanceLineRe = '^[ \t]*<!--[ \t]*from:[ \t]*overnight-agent[ \t]*-->[ \t\r]*$'
 
+# The writing agent's identity. Values are reduced to a safe alphabet, and a bare AUTO / AGENT word
+# gets a `_` so the stamp can never match the app's agent-block sentinel (AGENT_SENTINEL_RE).
+function Get-IdentityValue([string]$v) {
+  $s = ("$v" -creplace '[^A-Za-z0-9._@:-]', '_')
+  if ($s.Length -gt 128) { $s = $s.Substring(0, 128) }
+  $s = $s -creplace '(?i)\b(auto|agent)\b', '$1_'
+  if (-not $s) { $s = 'unknown' }
+  return $s
+}
+function Get-IdentityStamp([string]$Author) {
+  $session = if ($Author) { $Author } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { 'unknown' }
+  $hostName = if ($env:WRITE_TURN_HOST) { $env:WRITE_TURN_HOST } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
+  return ('<!-- oa-by: session={0} host={1} -->' -f (Get-IdentityValue $session), (Get-IdentityValue $hostName))
+}
+$script:IdentityStampRe = '^[ \t]*<!--[ \t]*oa-by[ \t]*:'
+
 function Add-AskStamp {
-  param([string]$Body, [string]$Ask)
+  param([string]$Body, [string]$Ask, [string]$By)
   # Insert `<!-- oa-ask: VALUE -->` directly beneath the turn's own provenance marker.
   #
   # WHY THERE, rather than appended at the end of the body. `Get-NewestAgentTurn` anchors on the
@@ -258,11 +337,11 @@ function Add-AskStamp {
   # the end of the body rather than dropping the declaration: an unstamped turn silently reverts
   # to the prose inference, which is the defect. `mark` appends its terminator on a NEW line
   # after this, so the stamp still precedes the boundary.
-  if ($at -lt 0) { return ($Body.TrimEnd() + $nl + $nl + "<!-- oa-ask: $Ask -->") }
+  if ($at -lt 0) { return ($Body.TrimEnd() + $nl + $nl + "<!-- oa-ask: $Ask -->" + $nl + $By) }
   $out = @()
   for ($i = 0; $i -lt $lines.Count; $i++) {
     $out += $lines[$i]
-    if ($i -eq $at) { $out += "<!-- oa-ask: $Ask -->" }
+    if ($i -eq $at) { $out += "<!-- oa-ask: $Ask -->"; $out += $By }
   }
   return ($out -join $nl)
 }
@@ -298,6 +377,158 @@ function Get-JournalDocMeta([string]$path) {
     doc_id  = $m.Groups['id'].Value
     doc_url = if ($m.Groups['url'].Success) { $m.Groups['url'].Value } else { '' }
   }
+}
+
+function Test-HumanSpokeLast([string]$journalPath) {
+  # $true when a human marker sits BELOW the newest managed turn -- the same signal G12
+  # already reads, and the one `oa-state.ps1`'s Test-UserPaused treats as the resume.
+  #
+  # Every uncertain answer is $true (= "he may have spoken", = allow). A false $true costs a
+  # turn that should have been refused, which is exactly today's behaviour; a false $false
+  # refuses the turn that answers him, which is worse than the bug being fixed.
+  try {
+    if (-not $journalPath -or -not (Test-Path -LiteralPath $journalPath)) { return $true }
+    $scan = Get-FenceMaskedText ([IO.File]::ReadAllText((Resolve-Path -LiteralPath $journalPath)))
+    $sentinel = $scan.LastIndexOf('OVERNIGHT-AGENT do not edit')
+    if ($sentinel -lt 0) { return $true }
+    $managed = $scan.Substring($sentinel)
+    $lastTurn = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*##[ \t][^\r\n]*')) {
+      if ($m.Value -match $script:ManagedTurnRe) { $lastTurn = $m.Index }
+    }
+    if ($lastTurn -lt 0) { return $true }
+    $lastHuman = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*<!--[ \t]*from:[ \t]*me[ \t]*-->[ \t]*$')) {
+      $lastHuman = $m.Index
+    }
+    return ($lastHuman -gt $lastTurn)
+  }
+  catch { return $true }
+}
+
+function Get-UserPauseVerdict([string]$taskId, [string]$journalPath) {
+  # $null means "not provably paused" and is returned for every uncertainty. Only a state file
+  # that positively says the USER put this row into a paused status, with no reply below the
+  # newest turn, produces a verdict.
+  if (-not $taskId) { return $null }
+  $statePath = Join-Path $OA_HOME "state\task-$taskId.json"
+  if (-not (Test-Path -LiteralPath $statePath)) { return $null }
+  $st = $null
+  $raw = ''
+  try {
+    $raw = Get-Content -LiteralPath $statePath -Raw
+    $st = $raw | ConvertFrom-Json
+  }
+  catch {
+    # Reported rather than swallowed, for #520/#632's reason: a check that COULD NOT LOOK must
+    # not be indistinguishable from one that looked and found nothing.
+    $script:PauseAdvisory = "G17 could not read state for task $taskId; pause not checked"
+    return $null
+  }
+  if (-not $st) { return $null }
+  if ("$($st.status_by)".ToLowerInvariant() -ne 'user') { return $null }
+  $status = "$($st.status)".ToLowerInvariant()
+  if ($script:PausedStatusWT -notcontains $status) { return $null }
+  if (Test-HumanSpokeLast $journalPath) { return $null }
+  # THE STAMP IS QUOTED VERBATIM FROM THE FILE, not read off the parsed object.
+  # ConvertFrom-Json coerces an ISO-8601 string into a [datetime], and stringifying that
+  # renders it in the HOST's culture and zone: the same state file printed
+  # "2026-09-14T16:14:56-07:00" under Windows PowerShell and "09/14/2026 23:14:56" under pwsh
+  # on Linux -- a different format AND a seven-hour shift, with no zone marker to show it had
+  # moved. Telling him he paused something at a time he did not is worse than saying nothing,
+  # so the raw text wins over the parse.
+  $at = ''
+  try {
+    $m = [regex]::Match($raw, '"paused_at"\s*:\s*"([^"]*)"')
+    if ($m.Success) { $at = $m.Groups[1].Value }
+  }
+  catch { $at = '' }
+  return [pscustomobject]@{
+    status = $status
+    at     = $at
+  }
+}
+
+function Test-TaskSessionCaller([string]$taskId, [string]$Author) {
+  $caller = if ($Author) { $Author } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  $ids = @()
+  $status = ''
+  $statusBy = ''
+  $statePath = Join-Path $OA_HOME "state\task-$taskId.json"
+  $stateOk = $false
+  if (Test-Path -LiteralPath $statePath) {
+    try {
+      $st = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+      $status = "$($st.status)".ToLowerInvariant()
+      $statusBy = "$($st.status_by)".ToLowerInvariant()
+      if ($st -and $st.PSObject.Properties['session'] -and $st.session) {
+        foreach ($k in @('session_id', 'prior_session_id')) {
+          if ($st.session.PSObject.Properties[$k] -and $st.session.$k) { $ids += "$($st.session.$k)" }
+        }
+        if ($st.session.PSObject.Properties['prior_session_ids'] -and $st.session.prior_session_ids) {
+          $ids += @($st.session.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+        }
+      }
+      $stateOk = $true
+    }
+    catch { $stateOk = $false }
+  }
+  $bound = $false
+  if ($caller) {
+    foreach ($sid in $ids) {
+      if ([string]::Equals($sid, $caller, [StringComparison]::OrdinalIgnoreCase)) { $bound = $true; break }
+    }
+  }
+  [pscustomobject]@{ caller = $caller; ids = @($ids); bound = $bound; stateOk = $stateOk; status = $status; statusBy = $statusBy }
+}
+
+function Get-ConsentFromEngine([string]$taskId) {
+  if (-not (Test-Path -LiteralPath $script:OaStatePs1)) {
+    return @{ ok = $false; reason = "engine not found at $script:OaStatePs1" }
+  }
+  $plannerDir = Split-Path -Parent $JournalDir
+  $argv = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script:OaStatePs1, 'consent',
+    '-Id', $taskId,
+    '-JournalDir', $JournalDir,
+    '-StateDir', (Join-Path $OA_HOME 'state'),
+    '-PlannerBoard', (Join-Path $plannerDir 'planner.md'),
+    '-PlannerCompleted', (Join-Path $plannerDir 'planner-completed.md'),
+    '-SnoozeStore', (Join-Path $plannerDir 'snooze.json'),
+    '-GatePath', (Join-Path $plannerDir 'agent-gate.md'),
+    '-UserSettings', (Join-Path $plannerDir 'user-settings.md')
+  )
+  $exe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
+  try {
+    $out = & $exe @argv 2>&1
+    $code = $LASTEXITCODE
+  }
+  catch {
+    return @{ ok = $false; reason = "could not run engine ($($_.Exception.Message))" }
+  }
+  $text = (@($out) | Out-String).Trim()
+  if ($code -ne 0) { return @{ ok = $false; reason = $(if ($text) { $text } else { "engine exited $code" }) } }
+  if (-not $text) { return @{ ok = $false; reason = 'engine printed nothing' } }
+  try { return @{ ok = $true; verdict = ($text | ConvertFrom-Json) } }
+  catch {
+    return @{ ok = $false; reason = 'engine output was not JSON: ' + $text.Substring(0, [Math]::Min(120, $text.Length)) }
+  }
+}
+
+function Get-ApprovedTaskOwnerFinding([string]$taskId, [string]$Author) {
+  if (-not $taskId) { return $null }
+  $owner = Test-TaskSessionCaller $taskId $Author
+  if ($owner.bound) { return $null }
+  if ($owner.statusBy -eq 'user' -and @('proposed', 'blocked') -contains $owner.status) { return $null }
+  $consent = Get-ConsentFromEngine $taskId
+  if ($consent.ok -and -not [bool]$consent.verdict.consent_ok) { return $null }
+  $reason = if ($consent.ok) { "consent_ok=true ($($consent.verdict.reason))" } else { "consent could not be checked ($($consent.reason))" }
+  $caller = if ($owner.caller) { $owner.caller } else { 'unknown' }
+  $binding = if (@($owner.ids).Count) { (@($owner.ids) -join ', ') } else { 'no bound task session' }
+  return (New-Finding 'G23' 1 $reason (
+    "task $taskId has a pending human approval, but caller '$caller' is not the bound task session ($binding). " +
+    "The coordinator must dispatch it with ``oa-state.ps1 session -Id $taskId -ForDispatch ...``; " +
+    'the task session owns the approved work and writes the outcome turn. Unknown callers fail closed. This guard cannot be disabled'))
 }
 
 function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$WindowMin, [string]$Author) {
@@ -419,13 +650,11 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   $ageMin = ((Get-Date) - $written).TotalMinutes
 
   # --- #532 A STALE STAMP IS AN UNKNOWN BOUNDARY, NOT AN AUTHORITATIVE ONE ----------------
-  # The block above trusts `last_woken_at` completely whenever it is present. That is only
-  # sound while something keeps it current, and nothing in this process does: the stamp is
-  # written by `oa-state.ps1 session -SessionWoken`, and the only thing that CALLS it is a
-  # sentence of prose in SKILL.md PHASE 1 ("Stamp `-SessionWoken` once it responds"). A guard
-  # is code; the fact this guard reads is an instruction someone has to remember. When the
-  # dispatcher skips it, the stamp keeps pointing at a PREVIOUS wake, every later turn is
-  # newer than it, and the comparison below refuses forever.
+  # The block above trusts `last_woken_at` completely whenever it is present. Direct dispatch
+  # now records that timestamp through `session -ForDispatch -DispatchInput` immediately before
+  # sending, after rechecking task eligibility, pause and input freshness. A stamp older than the
+  # wake window still means the current dispatch has no reliable boundary, so the comparison below
+  # must refuse rather than attribute an old turn to a new wake.
   #
   # MEASURED, on this task, by the run that could not record itself. Task #468, 2026-09-07:
   #
@@ -458,11 +687,9 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   # reaches 45 minutes independently for the same judgement (`$script:ActiveWakeMinutes` --
   # "a stale wake is not evidence anyone is working"). Two knobs would drift apart.
   #
-  # NOT FIXED BY STAMPING FROM HERE, and that is not an oversight. `oa-state.ps1 Cmd-Mark`
-  # refuses `-SessionWoken` precisely so the turn author cannot reset its own wake window
-  # (#514) -- G12 judges this author, so this author must not be able to write the field it
-  # is judged by. Stamping at dispatch is correct; stamping as remediation is the defect. So
-  # the read side is hardened instead, which needs no trust in the party being judged.
+  # NOT FIXED BY STAMPING FROM HERE, and that is not an oversight. Only the dispatch boundary
+  # may write the wake timestamp; allowing a task turn to reset it would hand the turn author a
+  # lever to extend its own wake window (#514). This guard only reads the boundary.
   $staleWake = $false
   $wakeAgeMin = 0
   if ($null -ne $wokenAt) {
@@ -633,6 +860,36 @@ function Test-TurnAsk([string]$Body) {
   is visible and Shiv can unpark it with one word, while a missed blocking question is
   silent and unbounded. `-DisableGuard G14` is the hatch for an author who means it.
 #>
+function Test-GateEditAsk([string]$Body) {
+  # #513: does this turn INSTRUCT an agent-gate edit, and does it show the edit was verified?
+  #
+  # Returns the offending line, or $null. Two independent narrowings keep it off ordinary prose,
+  # because a guard that fires on merely DISCUSSING the gate gets switched off within a week and
+  # the surface is then unguarded while appearing guarded:
+  #
+  #   1. the line must name the gate file or one of its two list headings, AND
+  #   2. the line must be INSTRUCTIONAL -- add/paste/put/append/copy/write/edit a line, or the
+  #      "once that line exists" construction #463 actually used.
+  #
+  # Fenced regions are masked first (#320): a turn DOCUMENTING this guard necessarily quotes an
+  # example of the bad ask, and reading a sample as the real thing is the defect this file has
+  # recorded before.
+  $scan = Get-FenceMaskedText $Body
+  # Verification is proven by naming the mechanism that performs it. `-GatePath` is the only way
+  # to evaluate a proposed gate without writing the real one, so a turn that has done the check
+  # has the word; a turn that has not, has not. Deliberately not a checkbox the author can tick
+  # -- it names the tool, and the tool is what makes the claim executable (#513's first comment).
+  if ($scan -match '(?i)-GatePath\b') { return $null }
+  $lines = $scan -split "`r?`n"
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $l = $lines[$i]
+    if ($l -notmatch '(?i)agent-gate\.md|Do not gate these|Always ask\b') { continue }
+    if ($l -notmatch '(?i)\b(add|paste|put|append|copy|write|edit|insert)\b|once that line exists') { continue }
+    return [pscustomobject]@{ Line = ($i + 1); Text = $l.Trim() }
+  }
+  return $null
+}
+
 function Test-AskContradiction([string]$Body) {
   $lines = $Body -split "`r?`n"
   for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -1010,6 +1267,59 @@ function Test-TurnBody {
     }
   }
 
+  # --- G18: an ask that instructs a gate edit which cannot work (#513) -------------
+  #
+  # #491 (G16 above) is this one level down: it catches a turn advertising a REPLY WORD the
+  # consent reader rejects. This catches a turn advertising a GATE EDIT the consent reader
+  # ignores. Same shape -- Shiv does exactly what was asked and nothing changes -- but it fails
+  # on the safety-critical side.
+  #
+  # THE FLOOR CANNOT BE SCOPED, AND THAT IS CORRECT. `Get-GateVerdict` runs the floor stage
+  # first with `Scoped = $false`, because narrowing a prohibition removes protection. The floor
+  # also matches on the ACTION KIND via `$script:GateOutcomeKinds`, so any floor rule naming an
+  # outcome blocks every action of that kind. No allow rule, however narrowly worded, can carve
+  # an exception out of it.
+  #
+  # So an ask saying "paste this line into **Do not gate these** and I'll proceed" is a promise
+  # the gate cannot keep. Measured live on #513: the exact line task #463 asked for leaves the
+  # verdict at `gate-floor-blocks`, and the only edit that flips it is REMOVING the data-loss
+  # floor rule entirely -- which is not "add one narrow permission", it is "drop your only
+  # blanket protection against permanent data loss across the whole repo". The ask presented the
+  # second as the first, and Shiv had already replied `Done` once on an edit that could not work.
+  #
+  # WHAT THIS REFUSES, AND WHY IT IS A PROMPT RATHER THAN A VERDICT. This script cannot evaluate
+  # the proposed gate itself: doing so means writing a candidate gate file and running the real
+  # `consent -GatePath <temp>` reader, which is a second process and a filesystem write from
+  # inside a guard whose job is to be cheap and pure. What it CAN do is refuse the turn until the
+  # author says they performed that check, because the failure this prevents is not a subtle
+  # mis-evaluation -- it is nobody evaluating at all.
+  #
+  # THE CHECK THE AUTHOR MUST HAVE DONE is the corrected one from the issue's own second comment,
+  # and the correction matters: comparing the proposed gate against TODAY'S gate passes a
+  # compound ask whose requested line contributes nothing (measured -- "floor removed + line" and
+  # "floor removed alone" are identical verdicts, both decided by the pre-existing YOLO rule). So
+  # the comparison is the proposed gate WITH the requested edit against the proposed gate
+  # WITHOUT it. The guard must attribute the verdict change to the requested edit, not merely
+  # observe that a verdict changed.
+  if (& $on 'G18') {
+    $gateAsk = Test-GateEditAsk -Body $Body
+    if ($gateAsk) {
+      $findings += New-Finding 'G18' $gateAsk.Line $gateAsk.Text (
+        'this turn asks Shiv to edit `agent-gate.md`, and nothing here shows the edit was ' +
+        'verified to work. The floor is matched by action KIND and cannot be scoped, so no ' +
+        'allow rule can create an exception to it -- an ask to add an allow line for a ' +
+        'floor-blocked action is a promise the gate cannot keep, and he has already spent a ' +
+        'cycle doing exactly that (#513). Verify it first: write the PROPOSED gate to a temp ' +
+        'file and run `oa-state.ps1 consent -Id <id> -Action <kind> -Repo <repo> -GatePath ' +
+        '<temp>`, then run it again with the requested edit OMITTED from that same proposed ' +
+        'gate. If the two verdicts match, the line you are asking for contributes nothing and ' +
+        'the ask is false however green it looks. Record the result in the turn -- the word ' +
+        '`-GatePath` is what this guard looks for -- and if the only working edit is removing ' +
+        'a floor rule, say so in those words and name what it exposes. `-DisableGuard G18` ' +
+        'for a turn that discusses the gate without instructing an edit')
+    }
+  }
+
   # --- G14: the declared ask must not contradict this turn's own question (#618) ----
   # Deliberately OUTSIDE the doc-bound block above. The measured failures are ordinary
   # tasks -- #472, the row that asked two questions and declared `offer`, has no catch-up
@@ -1027,6 +1337,111 @@ function Test-TurnBody {
          "blocked-on-human digest and no later run re-raises it (#618) -- it would reach " +
          'nobody. Use -Ask blocking if you need the answer to continue; reword to a ' +
          'statement if you do not; -DisableGuard G14 if you really mean it'))
+    }
+  }
+
+  # --- G17: a turn written into a task the user paused (#627) ----------------------
+  #
+  # #627's thesis in one line: `eligible` binds SELECTION but not WORK. Dispatch refuses to
+  # wake a paused task (`Assert-TaskDispatch`), and nothing re-checks that for a session
+  # that is ALREADY alive. A session woken before the pause lands keeps appending turns to
+  # a task he explicitly stopped -- measured on the live board: tasks 399 and 476 gained
+  # turns during a 6h window in which `admits` was 0 for the entire window.
+  #
+  # THIS GUARD IS DELIBERATELY THE PAUSE SLICE ONLY, and the reason is the blast radius.
+  # Measured across the live board, 270 rows, 2026-09-25:
+  #
+  #     eligible         2     <- refusing everything else would refuse 268 of 270 turns
+  #     awaiting_reply 182
+  #     done           137
+  #     off-board      123
+  #     USER-PAUSED      1
+  #
+  # So the eligibility test `Assert-TaskDispatch` applies is unusable here: applied to
+  # writing, it refuses essentially every turn. `done` and off-board have real cases too --
+  # the turn that REPORTS a task finished is written to a row that is already `done`. The
+  # user pause is the one condition that is unambiguous, because it is his instruction
+  # rather than a scheduling state, and it is 1 row rather than 137.
+  #
+  # IT FAILS OPEN EVERYWHERE EXCEPT THE CONFIDENT CASE. No -Id, no state file, unreadable
+  # state, no journal, no sentinel, no managed turn, or a human marker below the newest turn
+  # all ALLOW. That is not timidity: today this guard does not exist, so allowing is exactly
+  # the current behaviour and an under-fire is a no-op, while an over-fire would block the
+  # session that is trying to answer him. Given the resume rule below, that is the failure
+  # mode to design against.
+  #
+  # A REPLY IS THE RESUME. `oa-state.ps1`'s Test-UserPaused clears the pause when the journal
+  # has a trailing human message, BEFORE any `mark` records it. A guard keyed on the stored
+  # `paused_at` alone would latch: he replies, the field is still set until the next mark,
+  # and the turn answering him is the one refused. That is #569's defect pointed at his own
+  # resume, so the same trailing-human signal G12 already computes is honoured here.
+  if ((& $on 'G17') -and $script:PauseVerdict) {
+    $findings += New-Finding 'G17' 1 ("status=" + $script:PauseVerdict.status) (
+      'this task was paused by the user' +
+      $(if ($script:PauseVerdict.at) { ' at ' + $script:PauseVerdict.at } else { '' }) +
+      ', and writing a turn into it continues work he stopped. A pause is his instruction, not ' +
+      'a scheduling state: dispatch already refuses to WAKE a paused task, and this refuses the ' +
+      'other half #627 names -- a session that was already alive when the pause landed. He clears ' +
+      'it by replying in the journal below the newest turn, or a run records his decision with ' +
+      '`oa-state.ps1 mark -StatusBy user`. Use `-DisableGuard G17` only for a turn that is ' +
+      'deliberately recording the pause itself')
+  }
+
+  # --- G16: an advertised reply word the consent reader will reject (#491) ---------
+  #
+  # A turn can advertise any reply word it likes; the consent reader accepts a fixed list.
+  # Nothing checked that the word we ADVERTISE is a word the reader ACCEPTS, so an ask
+  # could be born unanswerable -- and the failure is silent in BOTH directions. Shiv
+  # replies, the reader returns `human-spoke-but-no-affirmative`, and that is
+  # indistinguishable from him declining. He has no way to tell why nothing happened.
+  #
+  # Measured across 239 journals: 48 newest turns advertised a reply token, and 33 of them
+  # advertised at least one word the reader rejects. A live instance from this repo's own
+  # agent: "reply **prune** and I'll remove 2,951 old session folders" -- `prune` does not
+  # match, so the action could never have been authorised by the word offered for it.
+  #
+  # WHY THE EXISTING GUARD MISSES IT. `mutcheck-consent-vocab-drift.ps1` pins SKILL.md's
+  # documented list against the reader. That is the DOCUMENTATION, not the output. A turn
+  # inventing `prune`, `confirm`, `delete` or `apply` passes every guard, because no guard
+  # read the asks we actually send. This is #301's class surviving #301's fix.
+  #
+  # SCOPED TO AN OFFERED REPLY, not to every emphasis. `**Needs from you:** reply `x`` and
+  # `Reply `x`` are offers; bold text in ordinary prose is not. The patterns below match the
+  # two shapes that actually read as "type this word back", which is the narrowest rule
+  # covering the measured instances -- a guard that fired on every bold phrase would be
+  # switched off within a week, and the surface would be unguarded while appearing guarded.
+  #
+  # A REFUSAL, because the cost is asymmetric and silent. A wrongly-refused turn is one
+  # reword by an author who is right there; an unanswerable ask is an action Shiv believes
+  # he authorised and that never happens. `-DisableGuard G16` is the hatch for a turn that
+  # deliberately offers a word the gate does not read as consent.
+  if (& $on 'G16') {
+    # ANCHORED TO AN ASK LINE, not to the word "reply" anywhere on a line. The first version
+    # matched `^...reply **x**` across the whole turn, and fired on a FIXTURE whose heading
+    # merely ended in the word "reply" (`## ... 2026-08-27 reply`) while its ask was
+    # "**Needs from you:** nothing" -- a refusal on a turn offering no reply word at all.
+    # A guard that fires where there is nothing to offer is the alarm-fatigue direction this
+    # comment block warns about, so the match now requires the line to BE an ask: either an
+    # ask-marker line, or one that opens with the offer itself.
+    foreach ($m in [regex]::Matches($Body, '(?im)^[ \t]*(?:\*{0,2}(?:Needs from you|Your call|Next)\b[^\r\n]*?|)\breply\s+(?:\*\*([^*\r\n]{1,40})\*\*|`([^`\r\n]{1,40})`)')) {
+      $line = $m.Value
+      # The word must be OFFERED, not merely mentioned: the line has to carry an ask marker,
+      # or start with the offer. `I will **prune** it` and a heading ending in "reply" are
+      # neither.
+      if ($line -notmatch '(?i)(Needs from you|Your call|Next)\b' -and $line -notmatch '(?i)^[ \t]*reply\b') { continue }
+      $wordRaw = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+      $word = "$wordRaw".Trim().Trim('.', ',', '!', ':', ';')
+      if (-not $word) { continue }
+      # Fenced quotations are examples, not offers -- the same exemption every other guard
+      # here grants, and the reason this file can document itself without refusing itself.
+      $lineNo = ($Body.Substring(0, $m.Index) -split "`r?`n").Count
+      if ($lineNo -le $lines.Count -and $inFence[$lineNo - 1]) { continue }
+      if ([regex]::IsMatch($word, $script:ConsentAffirmRe)) { continue }
+      $findings += New-Finding 'G16' $lineNo $m.Value.Trim() (
+        ("this turn offers `"$word`" as a reply, but the consent reader does not accept it, so " +
+         'typing it would do nothing and would be indistinguishable from him declining (#491). ' +
+         'Offer a word the reader accepts -- approve, yes, go ahead, lgtm, ship it, do it, ' +
+         'proceed, or `merge <N>` -- or use -DisableGuard G16 if you really mean it'))
     }
   }
 
@@ -1060,6 +1475,37 @@ function Test-TurnBody {
              'git grep "#' + $s.n + '" origin/main -- packages plugins, then propose something unworked. ' +
              'Use -DisableGuard G15 if he has asked for a second look at it')
           )
+        }
+      }
+    }
+  }
+
+  # --- G19: a proposed plan must start with an explicitly gated step (#739) --------
+  # A blocking proposal of entirely reversible work parks the task before it can be
+  # dispatched. Require the first numbered step's classification rather than trying to
+  # infer reversibility from arbitrary prose. Older turns are not rewritten by this guard.
+  if (& $on 'G19') {
+    $proposedLine = -1
+    $firstStep = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($inFence[$i]) { continue }
+      if ($lines[$i] -match '^[ \t]*\*\*Status:\*\*[ \t]*Proposed\b') { $proposedLine = $i }
+      if ($proposedLine -ge 0 -and $firstStep -lt 0 -and
+          $lines[$i] -match '^[ \t]*1\.[ \t]+') { $firstStep = $i }
+    }
+    if ($proposedLine -ge 0) {
+      if ($Ask -ne 'blocking' -or $firstStep -lt 0 -or
+          $lines[$firstStep] -notmatch '^[ \t]*1\.[ \t]+\[gated\][ \t]+') {
+        $findings += New-Finding 'G19' ($proposedLine + 1) $lines[$proposedLine].Trim() (
+          'proposed parks the task: its first numbered step must be [gated] and -Ask blocking. ' +
+          'For reversible or gate-allowed first steps, dispatch them this wake and write the ' +
+          'outcome as in-progress/done (or blocked only when gated work remains)')
+      }
+      for ($i = $proposedLine + 1; $i -lt $lines.Count; $i++) {
+        if ($inFence[$i] -or $lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+') { continue }
+        if ($lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+\[(reversible|gate-allowed|gated)\][ \t]+') {
+          $findings += New-Finding 'G19' ($i + 1) $lines[$i].Trim() (
+            'classify each proposed plan step as [reversible], [gate-allowed] or [gated]')
         }
       }
     }
@@ -1108,7 +1554,253 @@ function Test-TurnBody {
     }
   }
 
+  # --- G21: the identity stamp is the tool's to write ---------------------------------
+  # A body carrying its own `oa-by` could claim any author. Fenced quotations are exempt.
+  # Not disableable.
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($inFence[$i]) { continue }
+    if ($lines[$i] -match $script:IdentityStampRe) {
+      $findings += New-Finding 'G21' ($i + 1) $lines[$i].Trim() (
+        'this body writes its own `oa-by` identity stamp. The stamp records which agent wrote the turn and is ' +
+        'emitted by this tool from -Author / the session; a hand-written one could claim any author. Remove it ' +
+        '(or fence it, if you are quoting the format). This guard cannot be disabled')
+      break
+    }
+  }
+
   return $findings
+}
+
+# --- G20: the only file this tool writes is the task's own journal --------------------
+# agent-gate.md and user-settings.md hold the consent rules and are the user's alone (spec: the
+# agent can never write agent-gate.md). An -Id carrying a path, a target outside -JournalDir, or
+# a journal that is a link to a protected file is refused. Not disableable.
+# agent-lanes.json (docs/spec/Domain-lanes.md) is the same class: which PC may work which task is
+# the user's decision, and an agent that could write it could give itself any task.
+$script:ProtectedFiles = @('agent-gate.md', 'user-settings.md', 'agent-lanes.json')
+function Get-ProtectedTargetFinding([string]$JournalDir, [string]$TaskId, [string]$Journal) {
+  $tail = ' write-turn writes exactly one file, journal/task-<id>.md; agent-gate.md and ' +
+    'user-settings.md hold the consent rules and only the user writes them. This guard cannot be disabled'
+  if ($TaskId -cmatch '[\\/]' -or $TaskId.Contains('..') -or $TaskId.Contains(':')) {
+    return (New-Finding 'G20' 1 "-Id $TaskId" ('-Id must be a task id, not a path.' + $tail))
+  }
+  $dir = [IO.Path]::GetFullPath($JournalDir)
+  $target = [IO.Path]::GetFullPath($Journal)
+  $li = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+  if ($li -and $li.LinkType) {
+    $to = @($li.Target)[0]
+    if ($to) { $target = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $target), $to)) }
+  }
+  $leaf = [IO.Path]::GetFileName($target).ToLowerInvariant()
+  if ($script:ProtectedFiles -ccontains $leaf) {
+    return (New-Finding 'G20' 1 "-Id $TaskId" ("the target resolves to $([IO.Path]::GetFileName($target))." + $tail))
+  }
+  $prefix = $dir.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+  if (-not $target.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    return (New-Finding 'G20' 1 "-Id $TaskId" ('the target resolves outside -JournalDir.' + $tail))
+  }
+  return $null
+}
+
+# --- G22: no turn into a task that is snoozed today-or-later ---------------------------
+function Test-WriteSnoozeActive {
+  param([string]$Raw)
+  if (-not $Raw) { return $null }
+  $d = [datetime]::MinValue
+  $ok = [datetime]::TryParseExact(
+    $Raw.Trim(), 'yyyy-MM-dd',
+    [System.Globalization.CultureInfo]::InvariantCulture,
+    [System.Globalization.DateTimeStyles]::None, [ref]$d)
+  if ($ok -and $d.Date -ge (Get-Date).Date) { return $Raw.Trim() }
+  return $null
+}
+
+function Get-WriteBoardRowId {
+  param([string]$Line)
+  if ($Line -notmatch '^\s*\|') { return $null }
+  $first = (($Line.Trim().Trim('|') -split '\|') | Select-Object -First 1)
+  if ($null -eq $first) { return $null }
+  if ($first.Trim() -match '^(\d+)') { return $Matches[1] }
+  return $null
+}
+
+function Get-WriteSnoozeVerdict {
+  param([string]$TaskId, [string]$JournalDir)
+  if (-not $TaskId) { return $null }
+  $plannerDir = Split-Path -Parent $JournalDir
+  $storePath = Join-Path $plannerDir 'snooze.json'
+  $boardPath = Join-Path $plannerDir 'planner.md'
+
+  # STORE-READ-MUTANT-ANCHOR: store ignored
+  if (Test-Path -LiteralPath $storePath) {
+    try {
+      $raw = [IO.File]::ReadAllText($storePath, (New-Object Text.UTF8Encoding($false)))
+      if (-not [string]::IsNullOrWhiteSpace($raw)) {
+        $json = $raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($wrapper in 'tasks', 'snoozed') {
+          if ($json -and $json.PSObject.Properties.Name -contains $wrapper -and $json.$wrapper) {
+            $json = $json.$wrapper
+            break
+          }
+        }
+        if ($json) {
+          foreach ($prop in $json.PSObject.Properties) {
+            if ($prop.Name -notmatch '^\d+$') { continue }
+            if ($prop.Name -ne $TaskId) { continue }
+            $val = $prop.Value
+            if ($val -isnot [string]) { $val = $val.until }
+            $active = Test-WriteSnoozeActive ([string]$val)
+            if ($active) {
+              return [pscustomobject]@{ kind = 'active'; until = $active; source = 'snooze.json'; snippet = "snooze_until=$active" }
+            }
+            return $null
+          }
+        }
+      }
+    } catch {
+      # MALFORMED-STORE-MUTANT-ANCHOR: malformed store must refuse rather than read as empty.
+      return [pscustomobject]@{ kind = 'malformed'; until = ''; source = 'snooze.json'; snippet = 'snooze.json' }
+    }
+  }
+
+  if (Test-Path -LiteralPath $boardPath) {
+    foreach ($line in [IO.File]::ReadLines($boardPath, (New-Object Text.UTF8Encoding($false)))) {
+      $tid = Get-WriteBoardRowId $line
+      if ($tid -ne $TaskId) { continue }
+      if ($line -match '<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->') {
+        $active = Test-WriteSnoozeActive $Matches[1]
+        if ($active) {
+          return [pscustomobject]@{ kind = 'active'; until = $active; source = 'planner.md'; snippet = "snooze_until=$active" }
+        }
+      }
+    }
+  }
+  return $null
+}
+
+function Get-SnoozeWriteFinding($Verdict) {
+  if (-not $Verdict) { return $null }
+  if ($Verdict.kind -eq 'malformed') {
+    return (New-Finding 'G22' 1 $Verdict.snippet (
+      'cannot verify the snooze store; fix snooze.json. A malformed snooze.json could hide a task ' +
+      'the user explicitly postponed, so write-turn refuses to append a turn until the store is readable. ' +
+      'This guard cannot be disabled'))
+  }
+  # G22-FINDING-MUTANT-ANCHOR: the snooze write guard is load-bearing.
+  return (New-Finding 'G22' 1 $Verdict.snippet (
+    "task $Id is snoozed until $($Verdict.until) by $($Verdict.source), and a snoozed task gets no " +
+    'agent turn until that date has passed. Snooze is the executable eligibility floor: no plan, ' +
+    'execution, board edit, or journal edit is allowed while it is active, even when the journal has ' +
+    'a fresh human reply. This guard cannot be disabled'))
+}
+
+# --- G24: no turn into a task the USER closed (#825) ------------------------------------
+# "Closed" is exactly oa-state's Test-UserClosed: a status in ('done','skip') AND one of
+#   the row is on planner-completed.md (he moved it there in the app), or
+#   status_by is 'user' (absent reads as 'agent'), or
+#   the row is on neither planner.md nor the completed board.
+# There is no reply exemption: a reply on a closed task is `reopened_closed`, which is reported in
+# the run summary and never worked (#170 cause 3). Inputs are read lazily, cheapest first, so a
+# board that does not decide the verdict is never opened; one that must be read and cannot be
+# fails CLOSED.
+function Test-WriteBoardHasRow {
+  param([string]$Path, [string]$TaskId)
+  if (-not (Test-Path -LiteralPath $Path)) { return $false }
+  foreach ($line in [IO.File]::ReadLines($Path, (New-Object Text.UTF8Encoding($false)))) {
+    if ((Get-WriteBoardRowId $line) -eq $TaskId) { return $true }
+  }
+  return $false
+}
+
+function Get-WriteClosedVerdict {
+  param([string]$TaskId, [string]$JournalDir)
+  if (-not $TaskId) { return $null }
+  $statePath = Join-Path $OA_HOME "state\task-$TaskId.json"
+  if (-not (Test-Path -LiteralPath $statePath)) { return $null }
+  $plannerDir = Split-Path -Parent $JournalDir
+  $source = "state\task-$TaskId.json"
+  try {
+    $raw = [IO.File]::ReadAllText($statePath)
+    $st = if ([string]::IsNullOrWhiteSpace($raw)) { $null } else { $raw | ConvertFrom-Json -ErrorAction Stop }
+    if (-not $st) { return $null }
+    $status = "$($st.status)".ToLowerInvariant()
+    # CLOSED-STATUS-MUTANT-ANCHOR: only done/skip can be closed.
+    if (@('done', 'skip') -notcontains $status) { return $null }
+    $by = if ($st.PSObject.Properties['status_by'] -and $st.status_by) { "$($st.status_by)".ToLowerInvariant() } else { 'agent' }
+    $snippet = "status=$status status_by=$by"
+    # STATUS-BY-USER-MUTANT-ANCHOR
+    if ($by -eq 'user') { return [pscustomobject]@{ kind = 'closed'; why = 'status_by: user'; snippet = $snippet } }
+    $source = 'planner-completed.md'
+    # COMPLETED-BOARD-MUTANT-ANCHOR
+    if (Test-WriteBoardHasRow (Join-Path $plannerDir 'planner-completed.md') $TaskId) {
+      return [pscustomobject]@{ kind = 'closed'; why = 'it is on planner-completed.md'; snippet = "$snippet completed_board=true" }
+    }
+    $source = 'planner.md'
+    # OFF-BOARD-MUTANT-ANCHOR
+    if (-not (Test-WriteBoardHasRow (Join-Path $plannerDir 'planner.md') $TaskId)) {
+      return [pscustomobject]@{ kind = 'closed'; why = 'it is on neither board'; snippet = "$snippet on_board=false" }
+    }
+    return $null
+  }
+  catch {
+    # UNREADABLE-INPUT-MUTANT-ANCHOR: an input that must be read and cannot be refuses.
+    return [pscustomobject]@{ kind = 'unreadable'; why = $source; snippet = $source }
+  }
+}
+
+# His reply since the close, for G24's report: the text under the newest `<!-- from: me -->` marker
+# that sits below the newest managed turn (the same positions G12/G17 read), up to the next comment
+# or heading, whitespace-collapsed and cut at 160 characters. $null when there is none or the
+# journal cannot be read -- the generic G24 message still tells the agent to report the task.
+function Get-ClosedReplyQuote([string]$journalPath) {
+  try {
+    if (-not $journalPath -or -not (Test-Path -LiteralPath $journalPath)) { return $null }
+    $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $journalPath))
+    $scan = Get-FenceMaskedText $raw
+    $sentinel = $scan.LastIndexOf('OVERNIGHT-AGENT do not edit')
+    if ($sentinel -lt 0) { return $null }
+    $managed = $scan.Substring($sentinel)
+    $lastTurn = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*##[ \t][^\r\n]*')) {
+      if ($m.Value -match $script:ManagedTurnRe) { $lastTurn = $m.Index }
+    }
+    $lastHuman = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*<!--[ \t]*from:[ \t]*me[ \t]*-->[ \t]*$')) { $lastHuman = $m.Index }
+    if ($lastHuman -lt 0 -or $lastHuman -le $lastTurn) { return $null }
+    $lines = @($raw.Substring($sentinel + $lastHuman) -split "\r?\n" | Select-Object -Skip 1)
+    $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($l in $lines) {
+      if ($l -match '^[ \t]*(<!--|##[ \t])') { break }
+      if ($l.Trim()) { $kept.Add($l.Trim()) }
+    }
+    $q = ([regex]::Replace(($kept -join ' '), '\s+', ' ')).Trim()
+    if (-not $q) { return $null }
+    if ($q.Length -gt 160) { $q = $q.Substring(0, 160) + '...' }
+    return $q
+  }
+  catch { return $null }
+}
+
+function Get-ClosedWriteFinding($Verdict) {
+  if (-not $Verdict) { return $null }
+  if ($Verdict.kind -eq 'unreadable') {
+    return (New-Finding 'G24' 1 $Verdict.snippet (
+      "cannot verify whether task $Id is closed: $($Verdict.why) could not be read. write-turn refuses " +
+      'rather than risk a turn into a task the user closed; fix the file, then retry. This guard cannot be disabled'))
+  }
+  # REPLY-CARRIED-MUTANT-ANCHOR: his reply since the close must reach the run report, never be dropped.
+  if ($null -ne $Verdict.reply) {
+    return (New-Finding 'G24' 1 $Verdict.snippet (
+      "task $Id is closed by the user: $($Verdict.why). He replied since the close: `"$($Verdict.reply)`". " +
+      "Put that reply in the run report to him under Replies on closed tasks, with task $Id and " +
+      "`"reopen the row to continue`"; don't write to it and don't retry. Only the user can reopen a task " +
+      'he closed. This guard cannot be disabled'))
+  }
+  # G24-FINDING-MUTANT-ANCHOR: the closed-task write guard is load-bearing.
+  return (New-Finding 'G24' 1 $Verdict.snippet (
+    "task $Id is closed by the user: $($Verdict.why); report it in the run summary under Replies on closed tasks; " +
+    "don't write to it and don't retry. Only the user can reopen a task he closed, even when he has " +
+    'replied below it. This guard cannot be disabled'))
 }
 
 # --- entry point -------------------------------------------------------------------
@@ -1127,7 +1819,24 @@ if ($body.Trim().Length -eq 0) { Write-Error 'body file is empty'; exit 3 }
 # No `-Id` (linting a fragment) or a journal that does not exist yet -> $doc stays null and
 # G9-G11 are inert, exactly like a task with no doc.
 $journal = if ($Id) { Join-Path $JournalDir "task-$Id.md" } else { $null }
-$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
+# G20 is decided FIRST, from the -Id and the path alone. When it refuses, the target is not this
+# task's journal -- a path-shaped -Id such as `x/../../agent-gate` resolves to agent-gate.md itself --
+# so nothing below may open it. Reading it anyway made the refusal depend on that file being readable:
+# a transient lock (AV, sync, indexer) threw under ErrorAction Stop and exited 1 instead of refusing
+# with 2 (measured on CI, sw/g20/path-in-id-refused). The destination guards are inert for such a target.
+$prot = if ($Id) { Get-ProtectedTargetFinding $JournalDir $Id $journal } else { $null }
+$dest = if ($prot) { $null } else { $journal }
+$doc = if ($dest) { Get-JournalDocMeta $dest } else { $null }
+
+# #627: computed HERE, beside $doc, for the same reason -- it is a property of the DESTINATION
+# rather than of the text, and `-Validate` must reach the same verdict as the real write or
+# validating is theatre.
+$script:PauseVerdict = if ($dest) { Get-UserPauseVerdict $Id $dest } else { $null }
+$script:SnoozeVerdict = if ($dest) { Get-WriteSnoozeVerdict $Id $JournalDir } else { $null }
+$script:ClosedVerdict = if ($dest) { Get-WriteClosedVerdict $Id $JournalDir } else { $null }
+if ($script:ClosedVerdict -and $script:ClosedVerdict.kind -eq 'closed') {
+  $script:ClosedVerdict | Add-Member -NotePropertyName reply -NotePropertyValue (Get-ClosedReplyQuote $dest) -Force
+}
 
 # HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
 # --------------------------------------------------------
@@ -1149,10 +1858,26 @@ $findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc -Ask $
 # property of the DESTINATION, not of the text: the same body is fine on a fresh wake and a
 # duplicate on a spent one. `-Validate` sees it too, so a validate step gives the same verdict
 # as the real write - which is the only thing that makes validating worth doing.
-if ($Id -and ($DisableGuard -notcontains 'G12')) {
-  $wake = Get-WakeTurnFinding $journal $Id $WAKE_WINDOW_MIN $Author
+if ($dest -and ($DisableGuard -notcontains 'G12')) {
+  $wake = Get-WakeTurnFinding $dest $Id $WAKE_WINDOW_MIN $Author
   if ($wake) { $findings = @($findings) + @($wake) }
 }
+# G22 is destination state like G12/G17, but unlike them it is fail-closed and not disableable:
+# a snoozed task is outside every agent phase until the wake date has passed.
+if ($script:SnoozeVerdict) {
+  $snooze = Get-SnoozeWriteFinding $script:SnoozeVerdict
+  if ($snooze) { $findings = @($findings) + @($snooze) }
+}
+# G24, same shape as G22: fail-closed, not disableable, no reply exemption.
+if ($script:ClosedVerdict) {
+  $closed = Get-ClosedWriteFinding $script:ClosedVerdict
+  if ($closed) { $findings = @($findings) + @($closed) }
+}
+if ($dest) {
+  $approvedOwner = Get-ApprovedTaskOwnerFinding $Id $Author
+  if ($approvedOwner) { $findings = @($findings) + @($approvedOwner) }
+}
+if ($prot) { $findings = @($findings) + @($prot) }
 $findings = @($findings)
 $hasAsk = Test-TurnAsk -Body $body
 $askVal = "$Ask".Trim().ToLowerInvariant()
@@ -1208,6 +1933,11 @@ if ($Json) {
     Write-Host ("      {0}" -f $script:G15Note)
     Write-Host '      G15 did not run, so this turn may be proposing work that already shipped.'
     Write-Host '      Verify by hand: git grep "#<N>" origin/main -- packages plugins'
+  }
+  if ($script:PauseAdvisory) {
+    Write-Host '[write-turn] NOTE - could not check whether the user paused this task.' -ForegroundColor Yellow
+    Write-Host ("      {0}" -f $script:PauseAdvisory)
+    Write-Host '      G17 did not run, so this turn may be continuing work he stopped.'
   }
   # The #425 target, as a nudge rather than a refusal. G9's ceiling is where a turn stops
   # being defensible; this is where it stops being a pointer. Keeping them apart is what
@@ -1273,7 +2003,7 @@ if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this l
   }
 }
 
-$out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal) -replace "`r?`n", $nl) + $nl
+$out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal -By (Get-IdentityStamp $Author)) -replace "`r?`n", $nl) + $nl
 
 [IO.File]::WriteAllText($journal, $out, (New-Object Text.UTF8Encoding($false)))
 if (-not $Json) {

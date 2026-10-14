@@ -1,0 +1,59 @@
+{
+  "files": {},
+  "id": "mc/task-session-role/role-line-and-coordinator",
+  "steps": [
+    {
+      "args": {
+        "Id": "960"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": false,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": null,
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "960",
+        "kickoff_continuation": null,
+        "kind": null,
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": false,
+        "role_line": "You are the task session for planner task #960. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": null,
+        "state": null,
+        "teardown_command": null,
+        "verdict": "create",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": null
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "SessionId": "SESS_COORD"
+      },
+      "command": "whoami",
+      "exit": 0,
+      "json": {
+        "role": "coordinator",
+        "role_line": null,
+        "session_id": "SESS_COORD",
+        "session_id_source": "parameter",
+        "task_id": null,
+        "tasks": []
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

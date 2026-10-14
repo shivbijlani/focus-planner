@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/snooze-write/store-today-refused-json",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "9406",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G22",
+            "line": 1,
+            "snippet": "snooze_until=<DATE+0d>",
+            "why": "task 9406 is snoozed until <DATE+0d> by snooze.json, and a snoozed task gets no agent turn until that date has passed. Snooze is the executable eligibility floor: no plan, execution, board edit, or journal edit is allowed while it is active, even when the journal has a fresh human reply. This guard cannot be disabled"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "9406",
+        "length": 150,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

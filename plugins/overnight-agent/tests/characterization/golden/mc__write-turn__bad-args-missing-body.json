@@ -1,0 +1,15 @@
+{
+  "files": {},
+  "id": "mc/write-turn/bad-args-missing-body",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "BodyFile": "<ROOT>/input/missing.md",
+        "Validate": true
+      },
+      "exit": 1,
+      "tool": "write-turn"
+    }
+  ]
+}

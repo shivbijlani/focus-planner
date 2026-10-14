@@ -62,16 +62,34 @@ $MirrorPs1   = Join-Path $OA 'run-telegram-mirror.ps1'
 $InstalledOaState = Join-Path $env:USERPROFILE '.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1'
 
 # --- Resolve the bridge pin from run-telegram-mirror.ps1 (single source of truth) ---
-# That wrapper holds the pinned worktree; deriving from it means a rollback of the
-# pin automatically applies here too, instead of drifting into a second copy.
+# That wrapper holds the deployed package path; deriving from it means the sweeps
+# measure the exact source PHASE 3 executes.
 $BridgeJs = $null
 if (Test-Path $MirrorPs1) {
   $m = Select-String -Path $MirrorPs1 -Pattern "^\s*\`$Bridge\s*=\s*'([^']+)'" | Select-Object -First 1
-  if ($m) { $BridgeJs = $m.Matches[0].Groups[1].Value }
+  if ($m) { $BridgeJs = [Environment]::ExpandEnvironmentVariables($m.Matches[0].Groups[1].Value) }
 }
 if (-not $BridgeJs) {
-  $BridgeJs = 'V:\repos\focus-planner.worktrees\oa-block-stray-marker\packages\telegram-bridge\bin\telegram-bridge.js'
-  Write-Warning "Could not read the bridge pin from run-telegram-mirror.ps1; using the built-in default."
+  # THE PIN COULD NOT BE READ. Carrying on against any other copy would make the sweeps
+  # measure code different from the deployed bridge, so fail before running them.
+  #
+  # A warning is not enough for this, because nothing downstream fails: every sweep still
+  # runs, still prints, and still exits 0. The only symptom is that the answers came from
+  # the wrong source, which is precisely the "success-shaped failure" class the suite exists
+  # to catch. Refusing here costs one loud run; carrying on costs a night of confident wrong
+  # results.
+  throw @"
+Could not read the bridge pin from run-telegram-mirror.ps1.
+
+  expected a line matching:  `$Bridge = '<path to telegram-bridge.js>'
+  in:                        $MirrorPs1
+
+That line is the single source of truth for BRIDGE_SRC. It must stay a PLAIN
+single-quoted literal on one line -- a conditional assignment is valid PowerShell and
+invisible to this reader, which silently redirects every sweep at a retired worktree.
+
+Refusing rather than guessing a different bridge source.
+"@
 }
 
 # bin\telegram-bridge.js -> ..\src

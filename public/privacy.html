@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy · Focus Planner</title>
+  <meta name="description" content="How Focus Planner (plannermd.com) handles your data." />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #1a1a2e;
+      color: #e2e8f0;
+      font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 42rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+    h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
+    h2 { font-size: 1.15rem; margin: 2rem 0 0.5rem; color: #f8fafc; }
+    p, li { color: #cbd5e1; }
+    ul { padding-left: 1.25rem; }
+    a { color: #7dd3fc; }
+    code { font-size: 0.9em; color: #e2e8f0; }
+    .meta { color: #94a3b8; font-size: 0.9rem; margin: 0 0 2rem; }
+    .back { display: inline-block; margin-top: 2.5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Privacy Policy</h1>
+    <p class="meta">Focus Planner (<a href="https://plannermd.com/">plannermd.com</a>) · Effective 30 September 2026</p>
+
+    <p>
+      Focus Planner is a planner that keeps your tasks and journals as plain markdown files.
+      It runs entirely in your browser. There is no Focus Planner server, account, or database:
+      we never receive, see, or store your planner data.
+    </p>
+
+    <h2>Where your data lives</h2>
+    <ul>
+      <li><strong>In your browser.</strong> By default your files are saved in this browser's local storage (IndexedDB) on your device.</li>
+      <li><strong>In a folder you choose.</strong> If you pick a local folder, files are read and written there directly.</li>
+      <li><strong>In your own cloud storage, if you connect it.</strong> Backup &amp; sync copies your files to your own Google Drive or Microsoft OneDrive account. The data goes straight from your browser to Google or Microsoft; it never passes through us.</li>
+    </ul>
+
+    <h2>Google Drive access</h2>
+    <p>If you connect Google Drive, Focus Planner asks only for these limited permissions:</p>
+    <ul>
+      <li><code>drive.appdata</code>: a private, hidden app folder in your Drive that only Focus Planner can see. Backups are stored there.</li>
+      <li><code>drive.file</code>: only files and folders that Focus Planner itself created or that you opened with it. It cannot see or change any of your other Drive files.</li>
+    </ul>
+    <p>
+      Sign-in uses Google's OAuth. The access token stays in your browser, is used only to read and
+      write your planner files, and expires after about an hour. We also read your Google account
+      email address from Drive, and keep it only in your browser, so that renewing access picks the
+      right account.
+    </p>
+    <p>
+      Focus Planner's use and transfer of information received from Google APIs adheres to the
+      <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+      including the Limited Use requirements. Google user data is used only to provide the planner's
+      storage and sync features to you. It is not used for advertising, is not sold, and is not
+      transferred to anyone else. No human reads it.
+    </p>
+
+    <h2>Microsoft OneDrive access</h2>
+    <p>
+      If you connect OneDrive, Focus Planner asks only for its own app folder
+      (<code>Files.ReadWrite.AppFolder</code>). It cannot access the rest of your OneDrive.
+    </p>
+
+    <h2>What we don't do</h2>
+    <ul>
+      <li>No analytics, tracking pixels, or advertising.</li>
+      <li>No selling, renting, or sharing of your data with anyone.</li>
+      <li>No cookies of our own. Google and Microsoft set their own cookies on their sign-in pages.</li>
+    </ul>
+
+    <h2>Diagnostics</h2>
+    <p>
+      Settings includes an optional diagnostics recorder. It is off by default and keeps its
+      information in memory in your browser. A diagnostics report is only shared if you copy it and
+      send it yourself.
+    </p>
+
+    <h2>Removing access and deleting data</h2>
+    <ul>
+      <li>Disconnect a backup in <strong>Settings → Backup &amp; Sync</strong>. This removes the stored token from your browser.</li>
+      <li>Revoke Focus Planner's Google access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>, or its Microsoft access at <a href="https://account.live.com/consent/Manage">account.live.com/consent/Manage</a>.</li>
+      <li>Delete the backup copy from Google Drive under <em>Settings → Manage apps</em> in Drive, where you can delete Focus Planner's hidden app data.</li>
+      <li>Clear local data by clearing this site's data in your browser.</li>
+    </ul>
+
+    <h2>Changes</h2>
+    <p>If this policy changes, the updated version will be posted on this page with a new effective date.</p>
+
+    <h2>Contact</h2>
+    <p>Questions or requests: <a href="mailto:shiv@bijlanis.com">shiv@bijlanis.com</a>.</p>
+
+    <a class="back" href="/">← Back to Focus Planner</a>
+  </main>
+</body>
+</html>

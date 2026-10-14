@@ -65,7 +65,8 @@ $script = $null
 foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $script = (Resolve-Path $c).Path; break } }
 if (-not $script) { throw ("oa-state.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  ")) }
 Write-Host "target: $script"
-$src = [IO.File]::ReadAllText($script, $enc)
+. (Join-Path (Split-Path -Parent $script) 'oa-state-target.ps1')
+$src = if (Test-OaStateNodeTarget $script) { $null } else { [IO.File]::ReadAllText($script, $enc) }
 
 $pass = 0; $fail = 0
 function Check([string]$name, [bool]$cond, [string]$detail) {
@@ -153,10 +154,11 @@ function New-Dir {
 # report. Timeout is treated as a kill, and reported as one.
 function Invoke-Extract {
   param([string]$ScriptPath, [string]$Dir, [string[]]$ExtraArgs = @(), [int]$TimeoutSec = 60)
-  $args = @('-NoProfile', '-File', $ScriptPath, 'extract', '-Id', '999', '-JournalDir', $Dir) + $ExtraArgs
+  $cmd = Get-OaStateCommand $ScriptPath
+  $args = @($cmd.Prefix + @('extract', '-Id', '999', '-JournalDir', $Dir) + $ExtraArgs)
   $so = Join-Path $Dir ('o-' + [Guid]::NewGuid().ToString('N').Substring(0, 6) + '.txt')
   $se = "$so.err"
-  $p = Start-Process -FilePath 'pwsh' -ArgumentList $args -NoNewWindow -PassThru `
+  $p = Start-Process -FilePath $cmd.Exe -ArgumentList $args -NoNewWindow -PassThru `
        -RedirectStandardOutput $so -RedirectStandardError $se
   if (-not $p.WaitForExit($TimeoutSec * 1000)) {
     try { $p.Kill($true) } catch { }
@@ -172,16 +174,25 @@ function Invoke-Extract {
 
 function New-Mutant {
   param([hashtable[]]$Edits, [string]$Dir)
-  $t = $src
-  foreach ($e in $Edits) {
-    if ($t.IndexOf($e.Find, [StringComparison]::Ordinal) -lt 0) {
-      throw "mutation anchor not found in oa-state.ps1 (the script changed shape): $($e.Find)"
+  if (-not (Test-OaStateNodeTarget $script)) {
+    $t = $src
+    foreach ($e in $Edits) {
+      if ($t.IndexOf($e.Find, [StringComparison]::Ordinal) -lt 0) {
+        throw "mutation anchor not found in oa-state.ps1 (the script changed shape): $($e.Find)"
+      }
+      $t = $t.Replace($e.Find, $e.Replace)
     }
-    $t = $t.Replace($e.Find, $e.Replace)
+    $m = Join-Path $Dir 'oa-state-mutant.ps1'
+    [IO.File]::WriteAllText($m, $t, $enc)
+    return $m
   }
-  $m = Join-Path $Dir 'oa-state-mutant.ps1'
-  [IO.File]::WriteAllText($m, $t, $enc)
-  return $m
+  $target = $script
+  foreach ($e in $Edits) {
+    $find = if ((Test-OaStateNodeTarget $script) -and $e.JsFind) { $e.JsFind } else { $e.Find }
+    $replace = if ((Test-OaStateNodeTarget $script) -and $e.JsReplace) { $e.JsReplace } else { $e.Replace }
+    $target = New-OaStateMutant $target $e.Name $find $replace $Dir
+  }
+  return $target
 }
 
 # =============================================================================================
@@ -245,11 +256,17 @@ Write-Host 'mutations (each must be KILLED):'
 # BOUNDED half of -Verify must catch it. This is the defect itself, re-introduced.
 $d = New-Dir
 $m1 = New-Mutant -Dir $d -Edits @(@{
+  Name = 'm1'
   Find = '  $full = Get-Utf8ByteCount $text
   if ($maxBytes -le 0) {'
   Replace = '  $full = Get-Utf8ByteCount $text
   if ($true) { return [pscustomobject]@{ Head = $text; Tail = ''''; FullBytes = $full; ElidedBytes = 0; Truncated = $false } }
   if ($maxBytes -le 0) {'
+  JsFind = "  const full = getUtf8ByteCount(s);
+  if (maxBytes <= 0) return { Head: '', Tail: '', FullBytes: full, ElidedBytes: full, Truncated: full > 0 };"
+  JsReplace = "  const full = getUtf8ByteCount(s);
+  if (true) return { Head: s, Tail: '', FullBytes: full, ElidedBytes: 0, Truncated: false };
+  if (maxBytes <= 0) return { Head: '', Tail: '', FullBytes: full, ElidedBytes: full, Truncated: full > 0 };"
 })
 $o = Invoke-Extract -ScriptPath $m1 -Dir $d -ExtraArgs @('-Verify')
 $oj = $null; try { $oj = $o.Out | ConvertFrom-Json } catch { }
@@ -263,10 +280,15 @@ Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
 # must never produce, so the VERBATIM half of -Verify must catch it.
 $d = New-Dir
 $m2 = New-Mutant -Dir $d -Edits @(@{
+  Name = 'm2'
   Find = '  $headEnd = [Math]::Min((Get-JournalHeadIndex $content), $content.Length)
   $head = $content.Substring(0, $headEnd)'
   Replace = '  $headEnd = [Math]::Min((Get-JournalHeadIndex $content), $content.Length)
   $head = ($content.Substring(0, $headEnd) -replace ''SENTINEL'', ''PARAPHRASED'')'
+  JsFind = "  const headEnd = Math.min(getJournalHeadIndex(content), content.length);
+  const head = content.substring(0, headEnd);"
+  JsReplace = "  const headEnd = Math.min(getJournalHeadIndex(content), content.length);
+  const head = content.substring(0, headEnd).replace(/SENTINEL/g, 'PARAPHRASED');"
 })
 $o = Invoke-Extract -ScriptPath $m2 -Dir $d -ExtraArgs @('-Verify')
 $oj = $null; try { $oj = $o.Out | ConvertFrom-Json } catch { }
@@ -295,8 +317,10 @@ $guardLine = '    if (++$guard -gt 64) { break }'
 
 $d = New-Dir
 $m3 = New-Mutant -Dir $d -Edits @(
-  @{ Find = $mid_ok;    Replace = $mid_bad },
-  @{ Find = $guardLine; Replace = '    # guard removed by mutation' }
+  @{ Name = 'm3a'; Find = $mid_ok;    Replace = $mid_bad; JsFind = '    let mid = Math.floor((lo + hi) / 2.0);
+    if (mid >= hi) mid = hi - 1;
+    if (mid < lo) mid = lo;'; JsReplace = '    let mid = Math.round((lo + hi) / 2);' },
+  @{ Name = 'm3b'; Find = $guardLine; Replace = '    # guard removed by mutation'; JsFind = '    if (++guard > 64) break;'; JsReplace = '    // guard removed by mutation' }
 )
 $o = Invoke-Extract -ScriptPath $m3 -Dir $d -TimeoutSec 25
 Check 'm3 banker''s-rounding midpoint with no guard is killed (it HANGS)' `
@@ -304,7 +328,9 @@ Check 'm3 banker''s-rounding midpoint with no guard is killed (it HANGS)' `
 Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
 
 $d = New-Dir
-$m3a = New-Mutant -Dir $d -Edits @(@{ Find = $mid_ok; Replace = $mid_bad })
+$m3a = New-Mutant -Dir $d -Edits @(@{ Name = 'm3a'; Find = $mid_ok; Replace = $mid_bad; JsFind = '    let mid = Math.floor((lo + hi) / 2.0);
+    if (mid >= hi) mid = hi - 1;
+    if (mid < lo) mid = lo;'; JsReplace = '    let mid = Math.round((lo + hi) / 2);' })
 $o = Invoke-Extract -ScriptPath $m3a -Dir $d -TimeoutSec 45
 Check 'm3a the iteration guard contains the same bug (terminates instead of hanging)' `
   (-not $o.TimedOut) 'the guard did not stop the loop, so the backstop is not load-bearing'
@@ -316,8 +342,11 @@ Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
 # behavioural sentinel: a correctness hole that both mechanical guards are blind to.
 $d = New-Dir
 $m4 = New-Mutant -Dir $d -Edits @(@{
+  Name = 'm4'
   Find = '  $userMsgs = @(Get-JournalUserMessages $content)'
   Replace = '  $userMsgs = @()'
+  JsFind = '  const userMsgs = getJournalUserMessages(content);'
+  JsReplace = '  const userMsgs = [];'
 })
 $o = Invoke-Extract -ScriptPath $m4 -Dir $d
 Check 'm4 dropping the user-messages region is killed (newest decision lost)' `
@@ -332,11 +361,17 @@ Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
 $d = New-Dir
 $j = Join-Path $d 'task-999.md'
 $m5 = New-Mutant -Dir $d -Edits @(@{
+  Name = 'm5'
   Find = '  $content = Read-JournalText $path
   $sourceBytes = Get-Utf8ByteCount $content'
   Replace = '  $content = Read-JournalText $path
   Add-Content -LiteralPath $path -Value "mutant wrote here"
   $sourceBytes = Get-Utf8ByteCount $content'
+  JsFind = '  const content = readJournalText(p);
+  const sourceBytes = getUtf8ByteCount(content);'
+  JsReplace = '  const content = readJournalText(p);
+  fs.appendFileSync(p, ''mutant wrote here'');
+  const sourceBytes = getUtf8ByteCount(content);'
 })
 $b5 = [IO.File]::ReadAllBytes($j)
 $o = Invoke-Extract -ScriptPath $m5 -Dir $d

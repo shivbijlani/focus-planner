@@ -124,15 +124,31 @@ function Resolve-SettingsPath {
   if ($env:OVERNIGHT_AGENT_SETTINGS -and (Test-Path $env:OVERNIGHT_AGENT_SETTINGS)) {
     return $env:OVERNIGHT_AGENT_SETTINGS
   }
+  if ($env:OVERNIGHT_AGENT_PLANNER_DIR) {
+    $p = Join-Path $env:OVERNIGHT_AGENT_PLANNER_DIR 'user-settings.md'
+    if (Test-Path $p) { return $p }
+  }
   foreach ($root in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
     if ($root) {
       $p = Join-Path $root 'Apps\Focus Planner\user-settings.md'
       if (Test-Path $p) { return $p }
     }
   }
-  $p = Join-Path $env:LOCALAPPDATA 'overnight-agent\user-settings.md'
+  $p = if ($env:OVERNIGHT_AGENT_HOME) { Join-Path $env:OVERNIGHT_AGENT_HOME 'user-settings.md' }
+       else { Join-Path $env:LOCALAPPDATA 'overnight-agent\user-settings.md' }
   if (Test-Path $p) { return $p }
   throw 'Could not resolve user-settings.md; pass -SettingsPath.'
+}
+
+# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set; then the file
+# this rewrites, and the lore file beside it, must be inside the sandbox.
+function Assert-SandboxPath([string]$Path, [string]$What) {
+  if (-not $env:OA_SANDBOX_ROOT -or -not $Path) { return }
+  $root = [IO.Path]::GetFullPath($env:OA_SANDBOX_ROOT).TrimEnd('\', '/')
+  $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+  if (-not ($full -ieq $root -or $full.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))) {
+    throw "oa_sandbox_violation: $What '$full' is outside OA_SANDBOX_ROOT '$root'"
+  }
 }
 
 function Read-Utf8([string]$Path) {
@@ -222,6 +238,8 @@ function Find-CutPoint([string]$Text, [int]$Budget) {
 
 $settings = Resolve-SettingsPath
 if (-not $LorePath) { $LorePath = Join-Path (Split-Path -Parent $settings) 'agent-lore.md' }
+Assert-SandboxPath $settings 'user-settings.md'
+Assert-SandboxPath $LorePath 'agent-lore.md'
 
 $original = Read-Utf8 $settings
 $nl       = if ($original -match "`r`n") { "`r`n" } else { "`n" }

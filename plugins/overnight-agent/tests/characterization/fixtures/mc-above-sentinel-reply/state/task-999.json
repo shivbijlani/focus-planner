@@ -1,0 +1,14 @@
+{
+  "id": "999",
+  "status": "done",
+  "version": 1,
+  "plan_id": "t999-v1",
+  "processed_file_hash": "3886a37be70e0834f2f973a3c34591432618dd628686a6b5058567454f24c11e",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-10T10:00:00-07:00",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-10T10:00:00-07:00",
+  "last_turn_by": "sess-coordinator"
+}

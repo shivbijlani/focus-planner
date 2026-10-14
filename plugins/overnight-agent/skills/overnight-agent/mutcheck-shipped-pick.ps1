@@ -25,7 +25,8 @@
   mutants are copies of it, so this cannot pass by testing a re-implementation of the
   logic (#463: "green where it was written, broken where it runs").
 
-  Usage: pwsh -File mutcheck-shipped-pick.ps1 [-WriteTurnPath <write-turn.ps1>]
+  Usage: pwsh -File mutcheck-shipped-pick.ps1 [-WriteTurnPath <write-turn.ps1|write-turn.mjs>]
+  (-WriteTurnPath may name the Node port, item 3: same arms, mutants with its own anchors.)
   Exit 0 = every arm agreed. Exit 1 = the guard is not doing what it claims.
 #>
 [CmdletBinding()]
@@ -134,8 +135,9 @@ function Invoke-WriteTurn {
   # sets the same variable for the same reason.
   $env:WRITE_TURN_OA_HOME = $script:OaHome
   try {
-    $out = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject `
-        -BodyFile $BodyFile -Ask none -Validate @Extra 2>&1 | Out-String)
+    $wtArgs = @('-BodyFile', $BodyFile, '-Ask', 'none', '-Validate') + @($Extra)
+    $out = if ($Subject -like '*.mjs') { (& node $Subject @wtArgs 2>&1 | Out-String) }
+           else { (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @wtArgs 2>&1 | Out-String) }
     return [pscustomobject]@{ out = $out; code = $LASTEXITCODE }
   }
   finally {
@@ -246,7 +248,9 @@ Assert ($m1.code -eq 0) 'M1' '-DisableGuard G15 clears the refusal (so B1 was G1
 # ------------------------------------------------------------------------------- M2 dead
 # The guard body made unreachable. If B1 still refused here, something else was producing
 # the finding and G15 itself would be decorative -- the exact vacuity this file guards.
-$m2src = New-Mutant 'M2' $WriteTurnPath "  if (& `$on 'G15') {" '  if ($false) {'
+$wtNode = $WriteTurnPath -like '*.mjs'
+$m2src = if ($wtNode) { New-Mutant 'M2' $WriteTurnPath "  if (on('G15')) {" '  if (false) {' }
+         else { New-Mutant 'M2' $WriteTurnPath "  if (& `$on 'G15') {" '  if ($false) {' }
 $m2 = Invoke-WriteTurn $m2src $bodyPropose $repoCited
 Assert ($m2.code -eq 0) 'M2' 'guard made unreachable -> the refusal vanishes (it is load-bearing)' (Detail $m2)
 
@@ -266,6 +270,14 @@ Assert ($m2.code -eq 0) 'M2' 'guard made unreachable -> the refusal vanishes (it
 #
 # So the expectation is per-host rather than absolute, and the arm stays meaningful on
 # both: on 5.1 the defect must come back, on 7 the host masks it and we say so.
+# The Node port has no array unrolling, so its M3 is the defect's EFFECT instead: a single
+# proposal no longer counts, and the same fixture must pass silently again.
+if ($wtNode) {
+  $m3src = New-Mutant 'M3' $WriteTurnPath 'if (proposed.length > 0) {' 'if (proposed.length > 1) {'
+  $m3 = Invoke-WriteTurn $m3src $bodyPropose $repoCited
+  Assert ($m3.code -eq 0) 'M3' 'a single proposal no longer counted -> the silent pass comes back (the count is load-bearing)' (Detail $m3)
+}
+else {
 $m3src = New-Mutant 'M3' $WriteTurnPath `
   '$proposed = @(Get-ProposedIssues -Lines $lines -InFence $inFence)' `
   '$proposed = Get-ProposedIssues -Lines $lines -InFence $inFence'
@@ -275,6 +287,7 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
 }
 else {
   Assert ($m3.code -eq 0) 'M3' 'on 5.1 (the host the skill uses) stripping the @() reintroduces the silent pass' (Detail $m3)
+}
 }
 
 Write-Host ''

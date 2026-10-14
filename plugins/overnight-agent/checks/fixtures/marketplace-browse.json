@@ -1,0 +1,7 @@
+[
+  {
+    "name": "overnight-agent",
+    "description": "Autonomously makes progress on your planner tasks overnight using a per-task plan -> approve -> execute loop.",
+    "marketplace": "focus-planner"
+  }
+]

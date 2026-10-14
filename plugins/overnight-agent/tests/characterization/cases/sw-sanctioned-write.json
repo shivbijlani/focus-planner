@@ -1,0 +1,193 @@
+{
+  "fixture": "base",
+  "covers": [],
+  "cases": [
+    {
+      "id": "sw/identity/author-stamped",
+      "note": "Every appended turn carries oa-by with the -Author session and the host, under the oa-ask stamp.",
+      "files": {
+        "data/journal/task-931.md": "# Task 931: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "931",
+            "Ask": "none",
+            "Author": "sess-931"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+        }
+      ]
+    },
+    {
+      "id": "sw/identity/session-env-crlf",
+      "note": "Without -Author the session comes from COPILOT_AGENT_SESSION_ID; CRLF journal keeps CRLF.",
+      "files": {
+        "data/journal/task-932.md": "# Task 932: Fixture\r\n\r\nUser notes.\r\n\r\n---\r\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\r\n"
+      },
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home",
+        "COPILOT_AGENT_SESSION_ID": "env-sess-932"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "932",
+            "Ask": "offer",
+            "Json": true
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+        }
+      ]
+    },
+    {
+      "id": "sw/identity/unknown-and-escaped-host",
+      "note": "No session -> unknown; a host named AGENT-PC is escaped so the stamp never reads as an agent sentinel; odd characters folded.",
+      "files": {
+        "data/journal/task-933.md": "# Task 933: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home",
+        "WRITE_TURN_HOST": "AGENT-PC auto/x"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "933",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+        }
+      ]
+    },
+    {
+      "id": "sw/identity/no-marker-fallback",
+      "note": "G7 disabled and no marker: both stamps go at the end of the body.",
+      "files": {
+        "data/journal/task-934.md": "# Task 934: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "934",
+            "Ask": "none",
+            "Author": "sess-934",
+            "DisableGuard": [
+              "G7"
+            ]
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+        }
+      ]
+    },
+    {
+      "id": "sw/g21/hand-written-identity-refused",
+      "note": "A body carrying its own oa-by stamp is refused (G21).",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n<!-- oa-by: session=someone-else host=x -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+    },
+    {
+      "id": "sw/g21/not-disableable",
+      "note": "-DisableGuard G21 does not switch it off.",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G21"
+        ]
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n<!-- OA-BY: session=x -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+    },
+    {
+      "id": "sw/g21/fenced-quote-allowed",
+      "note": "A fenced quotation of the stamp format is not a stamp.",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n\n```\n<!-- oa-by: session=example host=example -->\n```\n"
+    },
+    {
+      "id": "sw/g20/path-in-id-refused",
+      "note": "An -Id carrying a path that resolves to agent-gate.md is refused before any write (G20), and nothing is written.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "x/../../agent-gate",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+        }
+      ]
+    },
+    {
+      "id": "sw/g20/backslash-id-validate-json",
+      "note": "G20 in -Validate -Json, with a backslash path.",
+      "tool": "write-turn",
+      "args": {
+        "Id": "..\\user-settings",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+    },
+    {
+      "id": "sw/g20/colon-id-not-disableable",
+      "note": "A drive or stream in -Id is refused, and -DisableGuard G20 does not switch it off.",
+      "tool": "write-turn",
+      "args": {
+        "Id": "1:evil",
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G20"
+        ]
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+    },
+    {
+      "id": "sw/g20/plain-id-unaffected",
+      "note": "An ordinary id with dots and dashes inside -JournalDir is not refused.",
+      "files": {
+        "data/journal/task-70.1-b.md": "# Task 70.1-b: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "70.1-b",
+            "Ask": "none",
+            "Author": "sess-70"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n"
+        }
+      ]
+    }
+  ]
+}

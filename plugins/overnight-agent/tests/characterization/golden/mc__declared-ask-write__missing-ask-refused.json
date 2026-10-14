@@ -1,0 +1,32 @@
+{
+  "files": {},
+  "id": "mc/declared-ask-write/missing-ask-refused",
+  "steps": [
+    {
+      "args": {
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G13",
+            "line": 1,
+            "snippet": "(no -Ask)",
+            "why": "this turn does not declare what it asks of Shiv, so `awaiting_reply` would be recovered by regex from its closing sentence -- which is how the skill's own \"**Your call:** reply below in plain English\" boilerplate parked 81 tasks (#560). Pass -Ask blocking (the run cannot proceed until he answers), -Ask offer (a courtesy option he may decline by silence), or -Ask none (nothing is asked)"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 150,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

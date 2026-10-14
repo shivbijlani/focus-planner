@@ -1,0 +1,57 @@
+{
+  "fixture": "mc-decision-record",
+  "covers": [
+    "mutcheck-decision-record"
+  ],
+  "cases": [
+    {
+      "id": "mc/decision-record/appends-ordered-reasons",
+      "note": "decisions appends a decision line with scan summary, Today ineligible reasons, dispatch/capacity outcomes, UTC times",
+      "tool": "oa-state",
+      "command": "decisions",
+      "args": {
+        "RunId": "run-1",
+        "ScanFile": "{data}\\scan-compact.json",
+        "Outcomes": "[{\"id\":\"362\",\"outcome\":\"dispatched\",\"at\":\"2020-01-02T10:00:00-08:00\",\"sessionId\":\"s1\"},{\"id\":\"400\",\"outcome\":\"capacity\"}]",
+        "DecisionNow": "2020-01-02T10:10:00-08:00",
+        "RetainDays": 7
+      }
+    },
+    {
+      "id": "mc/decision-record/rejects-free-text-outcome",
+      "note": "outcome words are a closed vocabulary",
+      "tool": "oa-state",
+      "command": "decisions",
+      "args": {
+        "RunId": "run-2",
+        "ScanFile": "{data}\\scan-compact.json",
+        "Outcomes": "[{\"id\":\"362\",\"outcome\":\"he seemed busy\"}]",
+        "DecisionNow": "2020-01-02T10:20:00-08:00"
+      }
+    },
+    {
+      "id": "mc/decision-record/rejects-full-scan-array",
+      "note": "decisions requires scan -Compact shape, not a full scan array",
+      "tool": "oa-state",
+      "command": "decisions",
+      "args": {
+        "RunId": "run-3",
+        "ScanFile": "{data}\\scan-array.json",
+        "DecisionNow": "2020-01-02T10:30:00-08:00"
+      }
+    },
+    {
+      "id": "mc/decision-record/retention-drops-stale-lines",
+      "note": "retention bounds both run-start and decision lines while preserving in-window starts",
+      "tool": "oa-state",
+      "command": "decisions",
+      "args": {
+        "RunId": "run-retain",
+        "ScanFile": "{data}\\scan-compact.json",
+        "Outcomes": "[]",
+        "DecisionNow": "2020-01-02T10:40:00-08:00",
+        "RetainDays": 1
+      }
+    }
+  ]
+}

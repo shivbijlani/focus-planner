@@ -1,0 +1,120 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-consent-authorship"
+  ],
+  "cases": [
+    {
+      "id": "mc/consent-authorship/unmarked-reopens-but-not-consent",
+      "fixture": "mc-consent-authorship",
+      "note": "unmarked prose below the turn reopens but fails closed for consent",
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "900",
+            "Status": "in-progress"
+          },
+          "record": false
+        },
+        {
+          "append": {
+            "data/journal/task-900.md": "\n## 2020-03-03\n\napproved, go ahead\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "consent",
+          "args": {
+            "Id": "900"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/consent-authorship/human-approval-consents",
+      "files": {
+        "data/journal/task-901.md": "# Task 901: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "901"
+      }
+    },
+    {
+      "id": "mc/consent-authorship/sibling-approval-not-consent",
+      "files": {
+        "data/journal/task-902.md": "# Task 902: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: dance-church -->\nApproved the class booking.\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "902"
+      }
+    },
+    {
+      "id": "mc/consent-authorship/agent-unstamped-heading-not-consent",
+      "files": {
+        "data/journal/task-903.md": "# Task 903: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nwhat is the status here?\n\n## Overnight Agent\n\nShort answer: yes, I approve this approach and it is approved on my side.\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "903"
+      }
+    },
+    {
+      "id": "mc/consent-authorship/spent-approval-reported",
+      "files": {
+        "data/journal/task-904.md": "# Task 904: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n\n## Overnight Agent\n\n**Status:** Done\n\nYour approve is drained; nothing here needs a decision.\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "904"
+      }
+    },
+    {
+      "id": "mc/consent-authorship/sibling-does-not-spend",
+      "files": {
+        "data/journal/task-905.md": "# Task 905: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n\n## 2020-03-03\n\n<!-- from: dance-church -->\nAdded 3 classes to the calendar.\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "905"
+      }
+    },
+    {
+      "id": "mc/consent-authorship/reapproval-after-spent",
+      "files": {
+        "data/journal/task-906.md": "# Task 906: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n\n## Overnight Agent\n\n**Status:** Done\n\nHandled.\n\n## 2020-03-04\n\n<!-- from: me -->\nyes go ahead\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "906"
+      }
+    },
+    {
+      "id": "mc/consent-authorship/fenced-marker-inert",
+      "files": {
+        "data/journal/task-907.md": "# Task 907: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\nA journal entry looks like this:\n\n```\n<!-- from: me -->\nyes\n```\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "907"
+      }
+    }
+  ]
+}

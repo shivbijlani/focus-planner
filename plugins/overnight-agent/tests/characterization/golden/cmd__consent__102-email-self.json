@@ -1,0 +1,28 @@
+{
+  "files": {},
+  "id": "cmd/consent/102-email-self",
+  "steps": [
+    {
+      "args": {
+        "Action": "send_email_self",
+        "Id": "102"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "send_email_self",
+        "consent_ok": true,
+        "gate_list": "allow",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Emailing myself",
+        "gate_state": "ok",
+        "id": "102",
+        "path": "<ROOT>/data/journal/task-102.md",
+        "reason": "gate-allowed",
+        "repo": null,
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

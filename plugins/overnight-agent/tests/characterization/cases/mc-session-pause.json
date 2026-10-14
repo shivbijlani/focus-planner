@@ -1,0 +1,529 @@
+{
+  "fixture": "mc-session-pause",
+  "covers": [
+    "mutcheck-session-pause"
+  ],
+  "cases": [
+    {
+      "id": "mc/session-pause/paused-verdicts",
+      "note": "user-paused blocked/proposed tasks are paused for live, absent, and dead bindings",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 920 | task 920 |\n| 921 | task 921 |\n| 922 | task 922 |\n| 923 | task 923 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-920.md": "# Task 920: task 920\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-921.md": "# Task 921: task 921\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-922.md": "# Task 922: task 922\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-923.md": "# Task 923: task 923\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-920.json": {
+          "id": "920",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t920-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": null,
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-920",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-921.json": {
+          "id": "921",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t921-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": null,
+          "unanswered_user_message_at": null
+        },
+        "state/task-922.json": {
+          "id": "922",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t922-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": null,
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-922",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "dead",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-923.json": {
+          "id": "923",
+          "status": "proposed",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t923-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": null,
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-923",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "920"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "921"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "922"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "923"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-pause/not-paused-controls",
+      "note": "agent-blocked and user-closed statuses are not pauses",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 924 | task 924 |\n| 925 | task 925 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-924.md": "# Task 924: task 924\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-925.md": "# Task 925: task 925\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-924.json": {
+          "id": "924",
+          "status": "blocked",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t924-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": null,
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-924",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-925.json": {
+          "id": "925",
+          "status": "done",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t925-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": null,
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-925",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "924"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "925"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-pause/resume-ordering",
+      "note": "human reply resumes only when it can be shown after the pause",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 926 | task 926 |\n| 927 | task 927 |\n| 928 | task 928 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-926.md": "# Task 926: task 926\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nok go ahead\n",
+        "data/journal/task-927.md": "# Task 927: task 927\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nok go ahead\n",
+        "data/journal/task-928.md": "# Task 928: task 928\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nok go ahead\n",
+        "state/task-926.json": {
+          "id": "926",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t926-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": "2020-03-01T06:00:00Z",
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-926",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-927.json": {
+          "id": "927",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t927-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": null,
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-927",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "state/task-928.json": {
+          "id": "928",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t928-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": "2020-03-01T08:00:00Z",
+          "unanswered_user_message_at": "2020-03-01T09:00:00Z",
+          "session": {
+            "session_id": "S-928",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        }
+      },
+      "mtimes": {
+        "data/journal/task-926.md": "-1h",
+        "data/journal/task-927.md": "-1h",
+        "data/journal/task-928.md": "-3h"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "926"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "927"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "928"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-pause/mark-preserves-and-clears-stamp",
+      "note": "re-marking a paused task preserves paused_at and user resume clears it",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 929 | task 929 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-929.md": "# Task 929: task 929\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-929.json": {
+          "id": "929",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t929-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": "2020-03-01T06:00:00Z",
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-929",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "929",
+            "Status": "blocked",
+            "StatusBy": "user"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "929"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "929",
+            "Status": "approved",
+            "StatusBy": "user"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "929"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-pause/agent-cannot-unpause",
+      "note": "agent status change is refused on paused task but StatusBy user is allowed",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 930 | task 930 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-930.md": "# Task 930: task 930\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-930.json": {
+          "id": "930",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t930-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": "2020-03-01T06:00:00Z",
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-930",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "930",
+            "Status": "in-progress"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "930",
+            "Status": "in-progress",
+            "StatusBy": "user"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "930"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/session-pause/for-dispatch-refuses-pause",
+      "note": "ForDispatch refuses user-paused task by name and does not wake it",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 931 | task 931 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-931.md": "# Task 931: task 931\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-931.json": {
+          "id": "931",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t931-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "paused_at": "2020-03-01T06:00:00Z",
+          "unanswered_user_message_at": null,
+          "session": {
+            "session_id": "S-931",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-931\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true,
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "931",
+            "ForDispatch": true,
+            "DispatchInput": "stale",
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "998",
+  "status": "done",
+  "version": 1,
+  "plan_id": "t998-v1",
+  "processed_file_hash": "fa403dba465b9f2255160f032ab169569d71117af92e89961aca6fd130591eee",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-10T10:00:00-07:00",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-10T10:00:00-07:00",
+  "last_turn_by": "sess-coordinator"
+}

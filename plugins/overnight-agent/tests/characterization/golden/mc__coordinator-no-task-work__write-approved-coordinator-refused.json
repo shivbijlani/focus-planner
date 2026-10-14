@@ -1,0 +1,21 @@
+{
+  "files": {},
+  "id": "mc/coordinator-no-task-work/write-approved-coordinator-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Author": "coordinator-session",
+        "Id": "970",
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G23 line 1: task 970 has a pending human approval, but caller 'coordinator-session' is not the bound task session (task-session-970, prior-task-session-970). The coordinator must dispatch it with `oa-state.ps1 session -Id 970 -ForDispatch ...`; the task session owns the approved work and writes the outcome turn. Unknown callers fail closed. This guard cannot be disabled",
+        "      | consent_ok=true (human-authored-affirmative)"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

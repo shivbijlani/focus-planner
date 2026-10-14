@@ -1,0 +1,29 @@
+{
+  "fixture": "mc-phase0-lock-scope",
+  "covers": [
+    "mutcheck-phase0-lock-scope"
+  ],
+  "cases": [
+    {
+      "id": "mc/phase0-lock-scope/critical-tools-read-only-policy",
+      "note": "critical-tools reads settings and MCP config without touching task state",
+      "files": {
+        "data/user-settings.md": "# settings\n\n| Setting | Value |\n| --- | --- |\n| Critical tools | `email` |\n"
+      },
+      "tool": "oa-state",
+      "command": "critical-tools"
+    },
+    {
+      "id": "mc/phase0-lock-scope/decisions-ledger-independent",
+      "note": "decisions appends to run ledger from a compact scan (functional half of no-state-lock behavior)",
+      "tool": "oa-state",
+      "command": "decisions",
+      "args": {
+        "RunId": "lock-scope-run",
+        "ScanFile": "{data}\\scan-compact.json",
+        "Outcomes": "[{\"id\":\"802\",\"outcome\":\"dispatched\",\"at\":\"2020-01-02T10:00:00-08:00\",\"sessionId\":\"s1\"}]",
+        "DecisionNow": "2020-01-02T10:05:00-08:00"
+      }
+    }
+  ]
+}

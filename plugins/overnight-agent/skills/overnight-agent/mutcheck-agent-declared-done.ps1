@@ -82,15 +82,13 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
 # Launch the host that actually EXISTS here. `powershell` is Windows-only, so hardcoding it makes
 # the guard die on the Linux runner with "The term 'powershell' is not recognized" -- which is
 # exactly how this file first failed CI while passing locally, on the run that added it to CI at
 # all. Same idiom as mutcheck-cadence-rearm.ps1 and mutcheck-doc-binding.ps1: under Core,
 # re-launch the very executable running this script; under 5.1, `powershell`.
-$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
-if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
-
 $script:pass = 0
 $script:fail = 0
 function Ok   { param([string]$n, [string]$m = '') $script:pass++; Write-Host ("  ok    {0} {1}" -f $n, $m) }
@@ -247,8 +245,10 @@ function New-Sandbox {
 
 function Invoke-Oa {
   param([string]$Subject, $Sx, [string[]]$OaArgs)
-  return (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @OaArgs `
-    -JournalDir $Sx.JDir -StateDir $Sx.SDir -PlannerBoard $Sx.Board -PlannerCompleted $Sx.Done -SnoozeStore $Sx.Store 2>&1)
+  $cmd = Get-OaStateCommand $Subject
+  return (& $cmd.Exe @($cmd.Prefix + $OaArgs + @(
+    '-JournalDir', $Sx.JDir, '-StateDir', $Sx.SDir, '-PlannerBoard', $Sx.Board,
+    '-PlannerCompleted', $Sx.Done, '-SnoozeStore', $Sx.Store)) 2>&1)
 }
 
 function Initialize-Sandbox {
@@ -302,13 +302,12 @@ function Get-Rows {
 function Get-Row { param($rows, [string]$id) return ($rows | Where-Object { "$($_.id)" -eq $id } | Select-Object -First 1) }
 
 function New-Mutant {
-  param([string]$Name, [string]$Find, [string]$Replace)
-  $src = [IO.File]::ReadAllText($ScriptPath, $utf8)
-  if ($src -notmatch [regex]::Escape($Find)) { throw "mutant $Name : anchor not found -> $Find" }
-  $dst = Join-Path $root "mutant-$Name.ps1"
-  New-Item -ItemType Directory -Path $root -Force | Out-Null
-  [IO.File]::WriteAllText($dst, $src.Replace($Find, $Replace), $utf8)
-  return $dst
+  param([string]$Name, [string]$Find, [string]$Replace, [string]$JsFind = $null, [string]$JsReplace = $null)
+  if (Test-OaStateNodeTarget $ScriptPath) {
+    if (-not $JsFind) { throw "mutant $Name has no Node twin" }
+    return New-OaStateMutant $ScriptPath $Name $JsFind $JsReplace $root
+  }
+  return New-OaStateMutant $ScriptPath $Name $Find $Replace $root
 }
 
 Write-Host ''
@@ -365,6 +364,12 @@ $m1 = New-Mutant 'M1' @'
   if (-not $row.on_board) { return $true }
   return $false
 '@ '  return $true
+' @'
+  if (psTruthy(get(row, 'user_completed'))) return true;
+  if (lowerInvariant(psStr(get(row, 'status_by'))) === 'user') return true;
+  if (!psTruthy(get(row, 'on_board'))) return true;
+  return false;
+'@ '  return true;
 '
 $sx1 = New-Sandbox 'm1'
 Initialize-Sandbox $m1 $sx1
@@ -373,7 +378,8 @@ Assert ($v1.eligible -ne $true) 'M1' 'the agent closing its own task silences #2
 
 # M2 - STANDING. Make the signal one-shot, so the re-snapshot at T+62s erases it. This is the
 #      arm that proves the compensating control actually compensates.
-$m2 = New-Mutant 'M2' '    unanswered_user    = [bool]($facts.HasTrailingHuman -or $aboveSentinelReply)' '    unanswered_user    = $false'
+$m2 = New-Mutant 'M2' '    unanswered_user    = [bool]($facts.HasTrailingHuman -or $aboveSentinelReply)' '    unanswered_user    = $false' `
+  '      unanswered_user: !!(facts.HasTrailingHuman || aboveSentinelReply),' '      unanswered_user: false,'
 $sx2 = New-Sandbox 'm2'
 Initialize-Sandbox $m2 $sx2
 $v2 = Get-Row (Get-Rows $m2 $sx2) $Victim
@@ -381,7 +387,8 @@ Assert ($v2.eligible -ne $true) 'M2' 'a one-shot signal is erased by the re-mark
 
 # M3 - OFFER. Report it, then refuse to work it. The row is visible in the JSON and still never
 #      reaches the run -- which is indistinguishable from the bug for the person waiting.
-$m3 = New-Mutant 'M3' '  if (Test-UnansweredUser $row) { return $true }' '  if ($false) { return $true }'
+$m3 = New-Mutant 'M3' '  if (Test-UnansweredUser $row) { return $true }' '  if ($false) { return $true }' `
+  "  if (testUnansweredUser(row)) return true;" "  if (false) return true;"
 $sx3 = New-Sandbox 'm3'
 Initialize-Sandbox $m3 $sx3
 $rows3 = Get-Rows $m3 $sx3
@@ -401,6 +408,8 @@ $m4 = New-Mutant 'M4' @'
   if (Test-UnansweredUser $row) {
     return [pscustomobject]@{ holds = $true; reason = 'holding:unanswered_user' }
   }
+'@ '' @'
+  if (testUnansweredUser(row)) return { holds: true, reason: 'holding:unanswered_user' };
 '@ ''
 $sx4 = New-Sandbox 'm4'
 Initialize-Sandbox $m4 $sx4
@@ -418,7 +427,8 @@ Assert ((Get-Row $rows4 '362').eligible -ne $false) 'M4' '...so Deferred work is
 #      Aimed at 248 (no marker), not at 247: `Test-TrailingHasUser` already rejects a MARKED
 #      sibling turn, so the two readers only diverge on text nobody signed. Measured while
 #      writing this arm -- pointing it at 247 passed against both readers and proved nothing.
-$m5 = New-Mutant 'M5' '  return [bool]($consent.human_segments -gt 0)' '  return (Test-TrailingHasUser $trailing)'
+$m5 = New-Mutant 'M5' '  return [bool]($consent.human_segments -gt 0)' '  return (Test-TrailingHasUser $trailing)' `
+  '  return !!(c.human_segments > 0);' '  return testTrailingHasUser(trailing);'
 $sx5 = New-Sandbox 'm5'
 Initialize-Sandbox $m5 $sx5
 $rows5 = Get-Rows $m5 $sx5

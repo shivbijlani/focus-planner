@@ -6,14 +6,26 @@
 
 import { enqueue, peekAll } from './queue.js'
 import { getTokens, clearTokens } from './auth/tokenStore.js'
-import { idbSet, idbGet, idbKeys, idbDel } from './idb.js'
-import { isConsumerVisibleMirrorPath, mtimeKeysForProvider, planMirrorSync } from './reconcile.js'
+import { idbGet, idbKeys, idbDel } from './idb.js'
+import { isConsumerVisibleMirrorPath, syncStateKeysForProvider, planMirrorSync } from './reconcile.js'
 import { diag } from '../../diagnostics/src/index.js'
+import { readLocalSnapshot, saveLocalReplica, readAppliedContent, rememberAppliedContent } from './localReplica.js'
 
 const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
 const INTENDED_KEY = 'folder-sync:intended-providers'
 const AUTO_RECONNECT_FLAG = 'folder-sync:auto-reconnected'
+const AUTO_RECONNECT_LOG = 'folder-sync:auto-reconnect-log'
+const AUTO_RECONNECT_WINDOW_MS = 10 * 60_000
+const AUTO_RECONNECT_MAX = 2
+
+export function recentAutoReconnects(providerId, now = Date.now()) {
+  try {
+    const raw = sessionStorage.getItem(`${AUTO_RECONNECT_LOG}:${providerId}`)
+    const list = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list.filter(t => now - t < AUTO_RECONNECT_WINDOW_MS) : []
+  } catch { return [] }
+}
 
 function readIntended() {
   if (typeof localStorage === 'undefined') return new Set()
@@ -33,30 +45,50 @@ function removeIntended(id) {
   const s = readIntended(); s.delete(id); writeIntended(s)
 }
 
-async function mirrorWrite(name, content) {
-  await idbSet(META_STORE, `local:${name}`, { content, mtime: Date.now() })
-}
-async function mirrorDelete(name) {
-  await idbSet(META_STORE, `local:${name}`, { deleted: true, mtime: Date.now() })
-}
-async function mirrorRead(name) {
-  const r = await idbGet(META_STORE, `local:${name}`)
-  return r && !r.deleted ? r.content : null
-}
-
-// Clear a provider's per-file remote-mtime tracking (keys `mtime:<id>:<name>`).
-// Called on disconnect so a later reconnect re-compares against the remote from
-// scratch instead of trusting stale mtimes left over from the previous session.
+// Clear a provider's sync state: per-file remote mtimes (`mtime:<id>:<name>`),
+// its pending push list and its first-contact seed marker. Called on disconnect
+// so a later reconnect re-compares against the remote from scratch (and re-seeds
+// a full backup) instead of trusting stale state from the previous session.
 async function clearProviderSyncMeta(providerId) {
   try {
     const keys = await idbKeys(META_STORE)
-    for (const k of mtimeKeysForProvider(keys, providerId)) {
+    for (const k of syncStateKeysForProvider(keys, providerId)) {
       await idbDel(META_STORE, k)
     }
   } catch { /* ignore */ }
 }
 
-export function createSyncEngine({ localAdapter, providers = [], redirectUri = (typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '') }) {
+// Parse an OAuth redirect response from the current URL. Auth-code flows put
+// `code` + `state` in the query string; the token model (Google) puts
+// `access_token` or `error` + `state` in the fragment. Returns a
+// URLSearchParams (with a `fromFragment` flag) or null when there is none.
+export function readAuthResponseParams(location) {
+  if (!location) return null
+  const query = new URLSearchParams(location.search || '')
+  if (query.has('code') && query.has('state')) {
+    query.fromFragment = false
+    return query
+  }
+  const hash = (location.hash || '').replace(/^#/, '')
+  if (!hash) return null
+  const frag = new URLSearchParams(hash)
+  if (frag.has('state') && (frag.has('access_token') || frag.has('error'))) {
+    frag.fromFragment = true
+    return frag
+  }
+  return null
+}
+
+function isEditingText() {
+  if (typeof document === 'undefined') return false
+  const el = document.activeElement
+  if (!el || el === document.body) return false
+  if (el.isContentEditable) return true
+  const tag = (el.tagName || '').toLowerCase()
+  return tag === 'textarea' || tag === 'input' || tag === 'select'
+}
+
+export function createSyncEngine({ localAdapter, providers = [], deferLocalInit = false, redirectUri = (typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '') }) {
   if (!localAdapter) throw new Error('createSyncEngine: localAdapter is required')
 
   const providerMap = new Map(providers.map(p => [p.id, p]))
@@ -66,6 +98,14 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     lastSync: null,
     error: null,
     providers: {}, // providerId -> { connected, state, error }
+  }
+  let resolveLocalReady
+  const localReady = new Promise(resolve => { resolveLocalReady = resolve })
+  let preparingLocal = null
+  function reportLocalError(error) {
+    console.error('[folder-sync] local replica failed:', error)
+    status = { ...status, state: 'error', error: error.message || String(error) }
+    emit()
   }
 
   // Listen for SW status broadcasts.
@@ -95,12 +135,8 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     navigator.serviceWorker.addEventListener('message', async (evt) => {
       const msg = evt.data
       if (!msg || msg.type !== 'remote-update') return
-      const content = await mirrorRead(msg.name)
-      if (content == null) {
-        await localAdapter.deleteFile(msg.name)
-      } else {
-        await localAdapter.writeFile(msg.name, content)
-      }
+      await localReady
+      try { await reconcileMirrorEntry(msg.name) } catch (error) { reportLocalError(error); return }
       // Tell consumer to refresh
       for (const fn of listeners) {
         try { fn({ ...status, lastRemoteUpdate: { name: msg.name, at: Date.now() } }) } catch { /* ignore */ }
@@ -114,6 +150,47 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     }
   }
 
+  // ONE lane for every operation that touches both the active store and the mirror: a local
+  // write/delete (active first, then mirror) and the two mirror→active replays below. Without it a
+  // replay that lands between a local write's two awaits sees active ≠ mirror and copies the OLD
+  // mirror content back over the new active file -- a lost write the UI then re-reads (#826: a
+  // task added within a second of load vanished from the board).
+  let lane = Promise.resolve()
+  function exclusive(fn) {
+    const run = lane.then(fn, fn)
+    lane = run.then(() => {}, () => {})
+    return run
+  }
+
+  function reconcileMirrorEntry(name) {
+    return exclusive(async () => {
+      const rec = await idbGet(META_STORE, `local:${name}`)
+      if (!rec) return 'skip'
+      const activeContent = await localAdapter.readFile(name)
+      const applied = await readAppliedContent(name)
+      // Divergence from the last copy we applied means the file was edited or
+      // recovered externally. Import it instead of replaying older cached data.
+      if (activeContent !== '' && activeContent != null &&
+          activeContent !== rec.content && (!applied || activeContent !== applied.content)) {
+        const merged = await saveLocalReplica(name, activeContent, { importing: true })
+        if (merged !== activeContent) await localAdapter.writeFile(name, merged)
+        await rememberAppliedContent(name, merged)
+        await enqueue(name)
+        nudgeSW('external-edit').catch(reportLocalError)
+        return 'write'
+      }
+      const action = planMirrorSync({
+        mirrorDeleted: !!rec.deleted,
+        mirrorContent: rec.content,
+        activeContent,
+      })
+      if (action === 'write') await localAdapter.writeFile(name, rec.content)
+      else if (action === 'delete') await localAdapter.deleteFile(name)
+      await rememberAppliedContent(name, rec.deleted ? null : rec.content)
+      return action
+    })
+  }
+
   // Replay the SW's IDB mirror into the consumer-visible active store. This
   // repairs the case where the SW pulled remote files into the mirror but the
   // live `remote-update` message never reached a window (background sync, no
@@ -122,6 +199,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   // deletions; it never clobbers an up-to-date file (see planMirrorSync).
   let reconcilingMirror = false
   async function reconcileMirrorToLocal() {
+    await localReady
     if (reconcilingMirror) return
     reconcilingMirror = true
     try {
@@ -138,28 +216,8 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
         // rewrites into the app store only triggers a no-op file-tree refresh.
         if (!isConsumerVisibleMirrorPath(name)) continue
         scanned++
-        const rec = await idbGet(META_STORE, k)
-        if (!rec) continue
-        let activeContent = ''
-        try { activeContent = await localAdapter.readFile(name) } catch { activeContent = '' }
-        const action = planMirrorSync({
-          mirrorDeleted: !!rec.deleted,
-          mirrorContent: rec.content,
-          activeContent,
-        })
-        try {
-          if (action === 'write') {
-            await localAdapter.writeFile(name, rec.content)
-            changed.push(name)
-            writes++
-          } else if (action === 'delete') {
-            await localAdapter.deleteFile(name)
-            changed.push(name)
-            deletes++
-          } else {
-            skipped++
-          }
-        } catch { /* ignore a single file failure */ }
+        const outcome = await reconcileMirrorEntry(name)
+        if (outcome === 'write') { changed.push(name); writes++ } else if (outcome === 'delete') { changed.push(name); deletes++ } else skipped++
       }
       diag('folder-sync.reconcile', 'mirror-reconcile-summary', {
         scanned,
@@ -177,7 +235,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
           try { fn(snapshot) } catch { /* ignore */ }
         }
       }
-    } catch { /* ignore */ } finally {
+    } catch (error) { reportLocalError(error) } finally {
       reconcilingMirror = false
     }
   }
@@ -194,6 +252,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   }
 
   async function nudgeSW(reason = 'write') {
+    await localReady
     const reg = await getSyncSwRegistration()
     if (!reg) return
     const sw = reg.active || reg.waiting || reg.installing
@@ -219,15 +278,19 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     emit()
   }
 
-  // Handle OAuth redirect: if URL contains code+state and we recognise it, complete auth.
+  // Handle OAuth redirect: if the URL carries an auth response (query-string
+  // `code` for the auth-code flow, or a fragment `access_token`/`error` for the
+  // token model) plus `state`, let the provider that owns the state consume it.
   async function maybeCompleteOAuthRedirect() {
     if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    if (!params.has('code') || !params.has('state')) return
+    const params = readAuthResponseParams(window.location)
+    if (!params) return
+    let consumed = false
     for (const p of providers) {
       try {
         const ok = await p.completeAuth(params, redirectUri)
         if (ok) {
+          consumed = true
           window.history.replaceState({}, document.title, window.location.pathname)
           addIntended(p.id)
           // Allow auto-reconnect to fire again on future breakages this session.
@@ -240,25 +303,39 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
         console.error(`[folder-sync] ${p.id} completeAuth failed:`, e)
       }
     }
+    // Never leave an unconsumed auth response (e.g. a failed silent renewal's
+    // `#error=interaction_required`, or a token for a stale state) in the URL.
+    if (!consumed && params.fromFragment) {
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search)
+    }
   }
 
   // If a provider the user previously connected is reporting it can no
   // longer sync (token expired / refresh revoked / tokens missing), redirect
   // them to sign in on page load. This prevents the user from editing data
   // locally while sync is broken — those edits would later clobber changes
-  // made on another device once sync resumes.
+  // made on another device once sync resumes. Providers that support silent
+  // auth (Google's token model, whose access tokens last about an hour) are
+  // renewed with a no-UI redirect instead, which returns straight back to the
+  // app while the user is still signed in to the IdP.
   //
   // Skipped when:
   //   - offline (can't reach the IdP),
-  //   - returning from an OAuth redirect (URL has code/state),
+  //   - returning from an OAuth redirect (URL has code/state/token),
   //   - the user voluntarily disconnected (provider not in intended set),
   //   - we already auto-redirected this session (avoid loops if the user
-  //     cancels the sign-in screen).
+  //     cancels the sign-in screen or silent renewal needs interaction),
+  //   - it already auto-redirected twice in the last 10 minutes, even if both
+  //     sign-ins "succeeded" (e.g. the IdP issues tokens the API then rejects),
+  //     so a success-then-reject cycle can never become a redirect loop.
+  // Deferred (retried on blur / tab switch) while the user is typing in an
+  // editable field, so a renewal never navigates away mid-edit.
   let autoReconnectAttempted = false
   function maybeAutoReconnect() {
     if (autoReconnectAttempted) return
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return
     if (!navigator.onLine) return
+    if (readAuthResponseParams(window.location)) return
     const params = new URLSearchParams(window.location.search)
     if (params.has('code') || params.has('state') || params.has('error')) return
     const intended = readIntended()
@@ -269,9 +346,16 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       if (!ps || ps.state !== 'reconnect-required') continue
       const flagKey = `${AUTO_RECONNECT_FLAG}:${p.id}`
       try { if (sessionStorage.getItem(flagKey)) continue } catch { /* ignore */ }
+      const recent = recentAutoReconnects(p.id)
+      if (recent.length >= AUTO_RECONNECT_MAX) continue
+      if (isEditingText()) return
       autoReconnectAttempted = true
-      try { sessionStorage.setItem(flagKey, '1') } catch { /* ignore */ }
-      Promise.resolve(p.startAuth(redirectUri)).catch(err => {
+      try {
+        sessionStorage.setItem(flagKey, '1')
+        sessionStorage.setItem(`${AUTO_RECONNECT_LOG}:${p.id}`, JSON.stringify([...recent, Date.now()]))
+      } catch { /* ignore */ }
+      const opts = p.supportsSilentAuth ? { silent: true } : undefined
+      Promise.resolve(p.startAuth(redirectUri, opts)).catch(err => {
         console.warn('[folder-sync] auto-reconnect failed:', err)
       })
       return
@@ -283,6 +367,10 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     window.addEventListener('online', () => nudgeSW('online'))
     document.addEventListener?.('visibilitychange', () => {
       if (document.visibilityState === 'visible') nudgeSW('visibility')
+      maybeAutoReconnect()
+    })
+    document.addEventListener?.('focusout', () => {
+      setTimeout(maybeAutoReconnect, 0)
     })
   }
 
@@ -295,6 +383,43 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   // Rehydrate the active store from the mirror on load, in case a prior
   // session pulled files (e.g. journals) that never reached a window.
   setTimeout(() => { reconcileMirrorToLocal().catch(() => {}) }, 800)
+  if (!deferLocalInit) prepareLocal().catch(() => {}) // prepareLocal reports failures
+
+  async function prepareLocal() {
+    if (preparingLocal) return preparingLocal
+    preparingLocal = exclusive(async () => {
+      await localAdapter.init?.()
+      // Import every existing file BEFORE the worker can seed a new target or
+      // replay an older mirror. Absence during startup is never a deletion.
+      const names = await localAdapter.listFiles()
+      for (const name of names) {
+        if (!isConsumerVisibleMirrorPath(name)) continue
+        const content = await localAdapter.readFile(name)
+        const snapshot = await readLocalSnapshot(name)
+        const applied = await readAppliedContent(name)
+        if (snapshot.content === content) {
+          await rememberAppliedContent(name, content)
+          continue
+        }
+        if (applied && content === applied.content) continue // unapplied remote update
+        const merged = await saveLocalReplica(name, content, { importing: true })
+        if (merged != null && merged !== content) await localAdapter.writeFile(name, merged)
+        await rememberAppliedContent(name, merged)
+        await enqueue(name)
+      }
+      // Conflict copies created during import must reach existing targets too.
+      for (const k of await idbKeys(META_STORE)) {
+        if (typeof k === 'string' && k.startsWith('local:sync-conflicts/')) await enqueue(k.slice('local:'.length))
+      }
+      resolveLocalReady()
+      return true
+    }).catch(error => {
+      preparingLocal = null
+      reportLocalError(error)
+      throw error
+    })
+    return preparingLocal
+  }
 
   return {
     // ---- local I/O (always immediate) ----
@@ -302,15 +427,27 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       return localAdapter.readFile(name)
     },
     async writeFile(name, contents) {
-      const res = await localAdapter.writeFile(name, contents)
-      await mirrorWrite(name, contents)
+      const res = await exclusive(async () => {
+        const previousContent = await localAdapter.readFile(name)
+        const r = await localAdapter.writeFile(name, contents)
+        const merged = await saveLocalReplica(name, contents, { previousContent })
+        if (merged !== contents) await localAdapter.writeFile(name, merged)
+        await rememberAppliedContent(name, merged)
+        return r
+      }).catch(error => { reportLocalError(error); throw error })
       await enqueue(name)
       nudgeSW('write')
       return res
     },
     async deleteFile(name) {
-      await localAdapter.deleteFile(name)
-      await mirrorDelete(name)
+      await exclusive(async () => {
+        const previousContent = await localAdapter.readFile(name)
+        await localAdapter.deleteFile(name)
+        // Record files retain row tombstones even when the markdown is removed.
+        // Plain files carry an explicit durable file tombstone.
+        await saveLocalReplica(name, null, { previousContent })
+        await rememberAppliedContent(name, null)
+      }).catch(error => { reportLocalError(error); throw error })
       await enqueue(name) // SW will see local missing → delete remote
       nudgeSW('delete')
     },
@@ -321,7 +458,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       return localAdapter.getFolderName()
     },
     async initLocal() {
-      return localAdapter.init?.() ?? true
+      return prepareLocal()
     },
     localAdapter,
 

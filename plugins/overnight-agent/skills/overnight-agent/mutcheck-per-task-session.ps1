@@ -79,7 +79,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 # Resolve the PowerShell host rather than hard-coding `powershell`: this guard runs on the Linux
 # CI runner as well as the nightly laptop, and everything it touches is plain text in a temp dir.
@@ -105,13 +107,19 @@ User notes at the top.
 
 # --- isolated sandbox ---------------------------------------------------------------
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-session-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$env:LOCALAPPDATA = $root
+$chatHome = Join-Path $root 'overnight-agent\task-chats'
+New-Item -ItemType Directory -Path $chatHome -Force | Out-Null
 $jdir = Join-Path $root 'journal'
 $sdir = Join-Path $root 'state'
+$sessionStateDir = Join-Path $root 'session-state'
 New-Item -ItemType Directory -Path $jdir -Force | Out-Null
 New-Item -ItemType Directory -Path $sdir -Force | Out-Null
+New-Item -ItemType Directory -Path $sessionStateDir -Force | Out-Null
 
 $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
+$sessionsStatus = Join-Path $root 'sessions-status.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
 $ids = 801, 802, 803, 804, 805, 806, 807, 808, 809, 810, 812
@@ -123,14 +131,32 @@ $boardText = "## Today`n`n| ID | Task |`n|---|---|`n"
 foreach ($id in $ids) { $boardText += "| $id | synthetic |`n" }
 [IO.File]::WriteAllText($board, $boardText, $utf8)
 [IO.File]::WriteAllText($store, '{}', $utf8)
+$idleSessions = @('SESS_801', 'SESS_FORCED', 'SESS_807') | ForEach-Object {
+  @{ id = $_; activity = @{ status = 'idle' } }
+}
+[IO.File]::WriteAllText($sessionsStatus, (@{ sessions = $idleSessions } | ConvertTo-Json -Depth 5), $utf8)
 
 # Three settings files, because the concurrency arms need to distinguish "absent" from "malformed"
 # from "actually configured" -- and a single file could not tell L, M and N apart.
 $noSettings = Join-Path $root 'settings-absent.md'          # deliberately never created
 $badSettings = Join-Path $root 'settings-bad.md'
 $twoSettings = Join-Path $root 'settings-two.md'
+$modelSettings = Join-Path $root 'settings-model.md'
+$badModelSettings = Join-Path $root 'settings-bad-model.md'
+$chatSettings = Join-Path $root 'settings-chat.md'
+$chatBareSettings = Join-Path $root 'settings-chat-bare.md'
+$chatInvalidSettings = Join-Path $root 'settings-chat-invalid.md'
+$chatBadIdSettings = Join-Path $root 'settings-chat-bad-id.md'
+$emDash = [char]0x2014  # the template's separator, kept out of the source so it stays ASCII
+$chatProjectId = '50b4020e-bf7b-40bf-90f4-5261b41710bc'
 [IO.File]::WriteAllText($badSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | plenty |`n", $utf8)
 [IO.File]::WriteAllText($twoSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | 2 |`n", $utf8)
+[IO.File]::WriteAllText($chatSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``$chatProjectId`` $emDash local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatBareSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | $chatProjectId $emDash local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatInvalidSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatBadIdSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``not-a-guid`` $emDash local folder project |`n", $utf8)
+[IO.File]::WriteAllText($modelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | ``claude-sonnet-5`` |`n", $utf8)
+[IO.File]::WriteAllText($badModelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | banana |`n", $utf8)
 
 # The run session's own workspace -- the thing a per-task session must never be given.
 $runWs = Join-Path $root 'run-session-workspace'
@@ -138,10 +164,12 @@ New-Item -ItemType Directory -Path $runWs -Force | Out-Null
 
 function Invoke-Oa {
   param([string[]]$OaArgs, [string]$Settings = $noSettings)
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
+  $all = $script:OaCmd.Prefix + $OaArgs +
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store,
+    '-SessionStateDir', $sessionStateDir,
     '-PlannerCompleted', (Join-Path $root 'absent-completed.md'),
     '-UserSettings', $Settings, '-RunWorkspace', $runWs)
+  if ($OaArgs -contains '-ForDispatch') { $all += @('-SessionsStatusFile', $sessionsStatus) }
   # Must not throw: -ExpectPreFix runs this against a build that REJECTS the new parameters, and a
   # hard failure there has to surface as a failed arm rather than a crashed harness -- otherwise
   # "pre-fix fails" is indistinguishable from "the harness is broken".
@@ -149,7 +177,7 @@ function Invoke-Oa {
   $ErrorActionPreference = 'Continue'
   # -Width is not cosmetic on the JSON-bearing calls: the default wraps captured output at the
   # host's render width, which splits a long JSON line and defeats ConvertFrom-Json.
-  try { $out = & $script:PsExe @all 2>&1 | Out-String -Width 4096 }
+  try { $out = & $script:OaCmd.Exe @all 2>&1 | Out-String -Width 4096 }
   catch { $out = '' }
   finally {
     $script:LastOaExit = $LASTEXITCODE
@@ -167,8 +195,8 @@ function Invoke-OaJson {
   try { return $text.Substring($start) | ConvertFrom-Json } catch { return $null }
 }
 
-function Get-Row([string]$id) {
-  $json = Invoke-Oa @('scan')
+function Get-Row([string]$id, [string]$Settings = $noSettings) {
+  $json = Invoke-Oa -OaArgs @('scan') -Settings $Settings
   $start = $json.IndexOf('[')
   if ($start -lt 0) { return $null }
   try { $rows = $json.Substring($start) | ConvertFrom-Json } catch { return $null }
@@ -179,11 +207,24 @@ function New-Bind {
   # A well-formed code bind for task $id, in its own worktree. Every arm that is not ABOUT the
   # workspace guard goes through this, so a change to the guard cannot quietly break the rest.
   param([string]$Id, [string]$SessionId, [string]$Settings = $noSettings, [switch]$WithForce)
+  $ws = Join-Path $root "wt-$Id"
+  # The workspace is MATERIALISED, because a real one is: `create_session` makes the worktree and
+  # only then is the binding written. Since #717 the verdict derives "gone" from the filesystem,
+  # so a fixture that names a path it never creates would describe a torn-down worktree for every
+  # arm here -- none of which is about teardown. The arms that ARE about it build their own paths.
+  New-Item -ItemType Directory -Path $ws -Force | Out-Null
+  # A worktree's `.git` is a FILE (`gitdir: ...`), which is what the checkout test looks for.
+  Set-Content -Path (Join-Path $ws '.git') -Value 'gitdir: /repo/.git/worktrees/x' -Encoding utf8
   $a = @('session', '-Id', $Id, '-SessionId', $SessionId, '-SessionKind', 'code',
     '-SessionProject', 'focus-planner',
-    '-SessionWorkspace', (Join-Path $root "wt-$Id"), '-WorkspaceType', 'worktree')
+    '-SessionWorkspace', $ws, '-WorkspaceType', 'worktree')
   if ($WithForce) { $a += '-Force' }
   return (Invoke-OaJson -OaArgs $a -Settings $Settings)
+}
+
+function New-ChatArgs([string]$id, [string]$sessionId) {
+  return @('session', '-Id', $id, '-SessionId', $sessionId, '-SessionKind', 'chat',
+    '-SessionProject', $chatProjectId, '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder')
 }
 
 $results = [ordered]@{}
@@ -193,6 +234,21 @@ function Check([string]$name, [scriptblock]$body) {
 }
 
 [void](Invoke-Oa @('seed'))
+
+Check 'model defaults to auto for an unbound task session' {
+  $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $noSettings
+  $task.model -eq 'auto' -and $task.model_source -eq 'default'
+}
+Check 'model override reaches task session and scan' {
+  $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $modelSettings
+  $scan = Get-Row '801' -Settings $modelSettings
+  $task.model -eq 'claude-sonnet-5' -and $task.model_source -eq 'settings' -and
+    $scan.model -eq 'claude-sonnet-5' -and $scan.model_source -eq 'settings'
+}
+Check 'malformed model falls back visibly to auto' {
+  $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $badModelSettings
+  $task.model -eq 'auto' -and $task.model_source -eq 'settings-malformed'
+}
 
 # --- A/B/C: the binding exists, persists, and is INTERPRETED ---------------------------
 $a = Invoke-OaJson @('session', '-Id', '801')
@@ -224,17 +280,17 @@ Check 'C live binding -> verdict reuse' { "$($b2.verdict)" -eq 'reuse' -and "$($
 # continuity the binding exists to provide.
 #
 # Note the two directory states below are NOT interchangeable, and that distinction is the arm's
-# real content. A workspace that EXISTS and is EMPTY is the torn-down signature. A workspace that
-# does not exist AT ALL is a session that has been bound but has not materialised its checkout yet
-# -- which `Test-SamePath` in the subject already calls out as "exactly when a bind is being
-# validated" -- and calling that dead would refuse to reuse a perfectly healthy young session.
+# real content. A workspace that EXISTS and is EMPTY is the half-torn-down signature #452 measured.
+# A workspace that does not exist AT ALL is the CLEAN teardown `git worktree remove` leaves, and
+# since #717 that is judged too -- see arm C-t below, which no longer depends on the remover
+# speaking up for the verdict to be right.
 $wsTorn = Join-Path $root 'wt-802'
 New-Item -ItemType Directory -Path $wsTorn -Force | Out-Null
-# -WithForce because task 801 above already holds a live session and the default concurrency is 1.
-# Without it the bind is refused for CAPACITY, task 802 stays unbound, and the arm would then read
-# `create` for a reason that has nothing to do with the workspace -- passing arm C-w while proving
-# nothing about it.
+# -WithForce isolates this workspace-verdict fixture from the live binding already created above.
 $null = New-Bind -Id '802' -SessionId 'SESS_802' -WithForce
+# New-Bind materialises a healthy workspace; strip the checkout back off to restore the measured
+# torn-down signature (directory present, deregistered, no `.git`).
+Remove-Item -LiteralPath (Join-Path $wsTorn '.git') -Force -ErrorAction SilentlyContinue
 $tornVerdict = Invoke-OaJson @('session', '-Id', '802')
 Check 'C-w a torn-down workspace is not reused' { "$($tornVerdict.verdict)" -ne 'reuse' }
 Check 'C-w- and it is replace, so prior work is not cold-started' { "$($tornVerdict.verdict)" -eq 'replace' }
@@ -251,9 +307,10 @@ Check 'C-w-- a workspace holding a checkout is reused again' {
 #
 # Measured 2026-09-04 against a REAL worktree removed with the sanctioned remove-worktree.ps1: a
 # clean teardown leaves NO directory at all. #466's survived only because a live session's cwd
-# blocked the final delete, which is what produced the empty-directory signature C-w tests. The
-# verdict cannot judge the clean case -- an absent path is equally a workspace that was never
-# materialised, and treating absence as death would discard live young sessions.
+# blocked the final delete, which is what produced the empty-directory signature C-w tests. Since
+# #717 the verdict judges that clean case too (a missing path under a reachable root is a deleted
+# worktree, not an uncreated one) -- but the remover still SAYS so, because a fact reported by the
+# side that holds it survives the workspace being recreated by something else.
 #
 # So the fact travels from the side that holds it: the remover knows it removed the workspace.
 $wsClean = Join-Path $root 'wt-812'
@@ -344,53 +401,117 @@ Check 'K code bind with a folder workspace is REFUSED' { $script:LastOaExit -ne 
 
 Check 'K- nothing was bound by any refusal' { (Invoke-OaJson @('session', '-Id', '803')).bound -eq $false }
 
-# A non-code task still gets its own session, and is not held to the worktree rules.
-$folder = Invoke-OaJson @('session', '-Id', '804', '-SessionId', 'SESS_804', '-SessionKind', 'folder', '-Force')
-Check 'K-- a folder task still gets a session' { "$($folder.session_id)" -eq 'SESS_804' -and "$($folder.kind)" -eq 'folder' }
+# A non-code task gets its own session in the configured local folder project.
+$chat = Invoke-OaJson -OaArgs ((New-ChatArgs '804' 'SESS_804') + @('-Force')) -Settings $chatSettings
+Check 'K-- a non-code task binds the configured local folder project' {
+  "$($chat.session_id)" -eq 'SESS_804' -and "$($chat.kind)" -eq 'chat' -and
+    $chat.project -eq $chatProjectId -and $chat.workspace -eq $chatHome -and $chat.workspace_type -eq 'folder'
+}
 
-# --- L/M/N: the concurrency setting (#391), and its fail-safe direction ----------------
-$l = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $noSettings
+$chatBare = Invoke-OaJson -OaArgs (New-ChatArgs '805' 'SESS_805') -Settings $chatBareSettings
+Check 'K-- a leading GUID followed by prose binds the configured project' {
+  "$($chatBare.session_id)" -eq 'SESS_805' -and $chatBare.project -eq $chatProjectId
+}
+
+$chatInvalid = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatInvalidSettings
+Check 'K-- prose-only setting names the invalid project value, not bind arguments' {
+  $script:LastOaExit -ne 0 -and
+    $chatInvalid -match 'session_chat_project_invalid' -and
+    $chatInvalid -match 'Non-code' -and $chatInvalid -match "got\s+'local" -and
+    $chatInvalid -notmatch 'session_chat_scope'
+}
+$chatBadId = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatBadIdSettings
+Check 'K-- a backticked non-ID is rejected before checking bind arguments' {
+  $script:LastOaExit -ne 0 -and $chatBadId -match 'session_chat_project_invalid: Non-code task project'
+}
+
+$chatDefault = Invoke-OaJson -OaArgs @('session', '-Id', '809', '-SessionId', 'SESS_809',
+  '-SessionProject', $chatProjectId, '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder') -Settings $chatSettings
+Check 'K--- an implicit chat kind binds the configured folder' {
+  "$($chatDefault.session_id)" -eq 'SESS_809' -and "$($chatDefault.kind)" -eq 'chat' -and
+    $chatDefault.project -eq $chatProjectId -and $chatDefault.workspace -eq $chatHome
+}
+
+$chatProject = Invoke-Oa @('session', '-Id', '810', '-SessionId', 'SESS_810',
+  '-SessionKind', 'chat', '-SessionProject', 'focus-planner', '-SessionWorkspace', $chatHome,
+  '-WorkspaceType', 'folder') -Settings $chatSettings
+Check 'K---- a chat cannot be bound to a different project' {
+  $script:LastOaExit -ne 0 -and $chatProject -match 'session_chat_scope'
+}
+
+$chatWorkspace = Invoke-Oa @('session', '-Id', '811', '-SessionId', 'SESS_811',
+  '-SessionKind', 'chat', '-SessionProject', $chatProjectId,
+  '-SessionWorkspace', (Join-Path $root 'chat-811'), '-WorkspaceType', 'folder') -Settings $chatSettings
+Check 'K----- a chat cannot be bound outside the configured home' {
+  $script:LastOaExit -ne 0 -and $chatWorkspace -match 'session_chat_home'
+}
+
+$missingSetting = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811')
+Check 'K----- a missing Non-code task project setting refuses binding' {
+  $script:LastOaExit -ne 0 -and $missingSetting -match 'Non-code task project'
+}
+$env:OneDrive = Join-Path $root 'overnight-agent'
+$inOneDrive = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatSettings
+Check 'K----- a OneDrive-rooted folder refuses binding' {
+  $script:LastOaExit -ne 0 -and $inOneDrive -match 'session_chat_onedrive'
+}
+Remove-Item Env:\OneDrive
+$gitMarker = Join-Path $root '.git'
+[IO.File]::WriteAllText($gitMarker, 'gitdir: synthetic', $utf8)
+$inWorktree = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatSettings
+Check 'K----- a code worktree containing the folder refuses binding' {
+  $script:LastOaExit -ne 0 -and $inWorktree -match 'session_chat_worktree'
+}
+Remove-Item -LiteralPath $gitMarker -Force
+
+# A legacy folder binding remains an error unless the caller explicitly chooses its new kind.
+# Keep this fixture synthetic: no live state is read or changed.
+$legacyBind = Invoke-OaJson @('session', '-Id', '812', '-SessionId', 'SESS_LEGACY_812',
+  '-SessionKind', 'chat', '-SessionProject', $chatProjectId,
+  '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder', '-Force') -Settings $chatSettings
+$legacyPath = Join-Path $sdir 'task-812.json'
+$legacyState = Get-Content -LiteralPath $legacyPath -Raw | ConvertFrom-Json
+$legacyState.session.kind = 'folder'
+$legacyState.session.state = 'dead'
+[IO.File]::WriteAllText($legacyPath, ($legacyState | ConvertTo-Json -Depth 20), $utf8)
+$legacyReplace = Invoke-Oa @('session', '-Id', '812', '-SessionId', 'SESS_REPLACEMENT_812')
+Check 'K------ the legacy folder binding fixture was persisted' {
+  $legacyBind.bound -eq $true -and "$($legacyState.session.kind)" -eq 'folder'
+}
+Check 'K------ a legacy folder replacement explains the required explicit kind' {
+  $script:LastOaExit -ne 0 -and $legacyReplace -match 'session_kind_invalid'
+}
+
+# --- L/M/N: the direct-dispatch send cap (#391 / #716), and its fail-safe direction ------
+$l = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $noSettings
 Check 'L absent settings file -> concurrency 1' { $l.concurrency -eq 1 }
 
-$m = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $badSettings
+$m = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $badSettings
 Check 'M malformed value -> concurrency 1, not unlimited' { $m.concurrency -eq 1 }
 
 # N is what stops L and M being satisfied by a hard-coded 1.
-$n = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $twoSettings
+$n = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $twoSettings
 Check 'N the settings row is actually read' { $n.concurrency -eq 2 }
 
-Check 'N- retained bindings are not a global in-flight count' {
-  $l.scope -eq 'run_local_concurrency' -and $l.dispatch_limit -eq 1 -and -not $l.PSObject.Properties['in_flight']
-}
-
-# --- O/P/U: binding is preparation, not admission (#589) -------------------------------
-# Enforcement moved to the actual dispatch boundary. Its cross-process/accepted-pending tests
-# run in CI alongside this suite; retaining a bind-time cap would restore the idle-task deadlock.
+# --- O/P/U: binding is preparation, not dispatch (#589) ----------------------------------
 foreach ($id in $ids) { [void](Invoke-Oa @('session', '-Id', "$id", '-SessionRelease')) }
-$zero = Invoke-OaJson @('session', '-InFlight')
-Check 'S releasing bindings leaves the configured per-run limit unchanged' { $zero.dispatch_limit -eq 1 }
 
 [void](New-Bind -Id '805' -SessionId 'SESS_805')
-$o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder')
+$o = Invoke-Oa -OaArgs (New-ChatArgs '806' 'SESS_806') -Settings $chatSettings
 Check 'O a second idle conversation can be bound without starting work' { $script:LastOaExit -eq 0 -and $o -match 'SESS_806' }
-Check 'O- two bindings do not spend or change the per-run limit' {
-  $capacity = Invoke-OaJson @('session', '-InFlight')
-  $capacity.scope -eq 'run_local_concurrency' -and $capacity.dispatch_limit -eq 1 -and -not $capacity.PSObject.Properties['at_capacity']
-}
 
-$p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder', '-Force')
+$p = Invoke-OaJson -OaArgs ((New-ChatArgs '806' 'SESS_806') + @('-Force')) -Settings $chatSettings
 Check 'P an explicit rebind still preserves the requested conversation' { "$($p.session_id)" -eq 'SESS_806' }
 
 # Changing the concurrency setting does not change the identity operation.
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
-$n2 = Invoke-OaJson -OaArgs @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder') -Settings $twoSettings
+$n2 = Invoke-OaJson -OaArgs (New-ChatArgs '806' 'SESS_806') -Settings $chatSettings
 Check 'N-- concurrency 2 admits the second item' { "$($n2.session_id)" -eq 'SESS_806' }
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
 
-# U: replacement still carries continuity. Waking the replacement is a separate, guarded
-# admission; a dead session is not an occupied worker and cannot bypass that check.
+# U: replacement still carries continuity. Waking the replacement is a separate guarded action.
 [void](Invoke-Oa @('session', '-Id', '805', '-SessionDead'))
-[void](New-Bind -Id '807' -SessionId 'SESS_807')          # 807 now holds the single slot
+[void](New-Bind -Id '807' -SessionId 'SESS_807')
 $u = Invoke-OaJson @('session', '-Id', '805', '-SessionId', 'SESS_805B')
 Check 'U a replacement binding preserves the prior conversation' { "$($u.session_id)" -eq 'SESS_805B' -and "$($u.prior_session_id)" -eq 'SESS_805' }
 
@@ -425,8 +546,9 @@ Check 'T- and never the raw force removal' { "$($t.teardown_command)" -notmatch 
 # the whole point: this harness ALSO calls ConvertFrom-Json, so `$v.created_at` is a [datetime]
 # here no matter what the tool stored, and stringifying it would test the harness rather than the
 # feature. The bytes on disk are the thing that has to survive to the next run.
-[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
-[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
+$dispatchInput807 = (Get-Row '807').dispatch_input
+[void](Invoke-Oa @('session', '-Id', '807', '-ForDispatch', '-DispatchInput', $dispatchInput807))
+[void](Invoke-Oa @('session', '-Id', '807', '-ForDispatch', '-DispatchInput', $dispatchInput807))
 $storedPath = Join-Path $sdir 'task-807.json'
 # Tolerant read: -ExpectPreFix runs this whole file against a build with no `session` command at
 # all, so nothing was ever bound and the file does not exist. That must surface as two failed arms,
@@ -435,44 +557,32 @@ $stored = if (Test-Path $storedPath) { [IO.File]::ReadAllText($storedPath) } els
 Check 'V created_at survives two round-trips as ISO' {
   $stored -match '"created_at"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
 }
-Check 'V- last_woken_at is stamped, and ISO' {
+Check 'V- ForDispatch stamps last_woken_at, and ISO' {
   $stored -match '"last_woken_at"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
 }
 
-# --- W: `-SessionWoken` on the wrong subcommand REFUSES (GH #532) -----------------------
-#
-# `$SessionWoken` sits in the SHARED param block, so PowerShell binds it for every subcommand,
-# but only `Cmd-Session` reads it. `mark -SessionWoken` therefore parsed, did nothing and exited
-# 0 -- and that silence is worse than a wrong answer, because an empty `last_woken_at` afterwards
-# cannot be distinguished from never having called it at all. Five of the eight tasks holding
-# live sessions were in exactly that state when this arm was written.
-#
-# Acts on 807 because $storedPath is 807: an arm that reads one task while acting on another
-# passes trivially, which is exactly how the first draft of W- reported green.
-#
-# The arm asserts REFUSAL rather than stamping on purpose. Making `mark` stamp would hand the
-# turn author a second lever to reset its own wake window (#514), and G12 judges that author.
+# --- W: the legacy stamp-only option is no longer a dispatch path (#716) ----------------
+# Both subcommands reject the removed flag; the only wake stamp now requires -ForDispatch and
+# the exact scan fingerprint. Acts on 807 because $storedPath is 807.
 $wokeBefore = if (Test-Path $storedPath) {
   ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
 } else { '' }
 [void](Invoke-Oa @('mark', '-Id', '807', '-SessionWoken'))
-$wokeExit = $script:LastOaExit
+$markWokenExit = $script:LastOaExit
+$markWokenAfter = if (Test-Path $storedPath) {
+  ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
+} else { '' }
+[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
+$sessionWokenExit = $script:LastOaExit
 $wokeAfter = if (Test-Path $storedPath) {
   ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
 } else { '' }
 
-Check 'W mark -SessionWoken refuses instead of exiting 0' { $wokeExit -ne 0 }
-# The load-bearing half: refusing must also mean CHANGING NOTHING. A refusal that still wrote
-# would be the #514 lever wearing an error message.
-Check 'W- a refused mark -SessionWoken leaves the stamp untouched' { $wokeAfter -eq $wokeBefore }
-# Discrimination: the CORRECT call must keep working, or this trades one broken path for another.
-[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
-$sessExit = $script:LastOaExit
-$wokeVia = if (Test-Path $storedPath) {
-  ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
-} else { '' }
-Check 'W-- session -SessionWoken still stamps' { $sessExit -eq 0 -and $wokeVia -ne '' }
-# ...and an ordinary mark is unaffected, so the refusal is scoped to the flag and not the verb.
+Check 'W removed -SessionWoken is rejected by mark' { $markWokenExit -ne 0 }
+Check 'W- removed -SessionWoken is rejected by session' { $sessionWokenExit -ne 0 }
+Check 'W-- rejected stamp-only calls leave the wake timestamp untouched' {
+  $markWokenAfter -eq $wokeBefore -and $wokeAfter -eq $wokeBefore
+}
 [void](Invoke-Oa @('mark', '-Id', '807', '-Status', 'in-progress'))
 Check 'W--- an ordinary mark still succeeds' { $script:LastOaExit -eq 0 }
 

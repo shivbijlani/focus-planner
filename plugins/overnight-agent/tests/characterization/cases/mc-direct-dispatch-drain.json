@@ -1,0 +1,25 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-direct-dispatch-drain"
+  ],
+  "note": "The mutcheck guards SKILL.md PHASE 1 prose (refill, idle poll, no-repeat, cutoff). Its runtime half is the refill: re-running `scan -Compact` after a dispatched task's state moved must reflect the new state.",
+  "cases": [
+    {
+      "id": "mc/direct-dispatch-drain/refill-rescan-after-mark",
+      "steps": [
+        { "tool": "oa-state", "command": "scan", "args": { "Compact": true } },
+        { "tool": "oa-state", "command": "mark", "args": { "Id": "101", "Status": "in-progress", "TurnBy": "sess-task-101" }, "record": false },
+        { "tool": "oa-state", "command": "scan", "args": { "Compact": true } }
+      ]
+    },
+    {
+      "id": "mc/direct-dispatch-drain/refill-rescan-after-user-pause",
+      "steps": [
+        { "tool": "oa-state", "command": "mark", "args": { "Id": "121", "Status": "blocked", "StatusBy": "user" }, "record": false },
+        { "tool": "oa-state", "command": "scan", "args": { "Compact": true } },
+        { "tool": "oa-state", "command": "session", "args": { "Id": "121", "CheckDispatch": true } }
+      ]
+    }
+  ]
+}

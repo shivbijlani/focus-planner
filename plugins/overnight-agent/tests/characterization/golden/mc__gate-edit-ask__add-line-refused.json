@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "mc/gate-edit-ask/add-line-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G18 line 7: this turn asks Shiv to edit `agent-gate.md`, and nothing here shows the edit was verified to work. The floor is matched by action KIND and cannot be scoped, so no allow rule can create an exception to it -- an ask to add an allow line for a floor-blocked action is a promise the gate cannot keep, and he has already spent a cycle doing exactly that (#513). Verify it first: write the PROPOSED gate to a temp file and run `oa-state.ps1 consent -Id <id> -Action <kind> -Repo <repo> -GatePath <temp>`, then run it again with the requested edit OMITTED from that same proposed gate. If the two verdicts match, the line you are asking for contributes nothing and the ask is false however green it looks. Record the result in the turn -- the word `-GatePath` is what this guard looks for -- and if the only working edit is removing a floor rule, say so in those words and name what it exposes. `-DisableGuard G18` for a turn that discusses the gate without instructing an edit",
+        "      | **Needs from you:** add a line to `agent-gate.md` under **Do not gate these**."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

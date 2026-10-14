@@ -44,6 +44,56 @@ async function syncOnce(localStore, remoteStore, now) {
 }
 
 describe('reconcileRecordsFile — end-to-end record sync', () => {
+  it('an empty structured local board with a live sidecar must not manufacture a mass delete', async () => {
+    const local = store({ [PATH]: plan(row(1, 'A'), row(2, 'B')) })
+    const remote = store({})
+    await syncOnce(local, remote, 1000)
+    local.files.set(PATH, plan())
+    await syncOnce(local, remote, 2000)
+    expect(local.get(PATH)).toContain(row(1, 'A'))
+    expect(local.get(PATH)).toContain(row(2, 'B'))
+    expect(JSON.parse(local.get(sidecarPath(PATH))).entries['1'].deleted).toBe(false)
+  })
+
+  it('a missing local file with a leftover sidecar does not delete even its last remote row', async () => {
+    const local = store({ [PATH]: plan(row(1, 'A')) })
+    const remote = store({})
+    await syncOnce(local, remote, 1000)
+    local.files.delete(PATH)
+    await syncOnce(local, remote, 2000)
+    expect(local.get(PATH)).toContain(row(1, 'A'))
+    expect(remote.get(PATH)).toContain(row(1, 'A'))
+  })
+
+  it('remote read failures abort before changing content or sidecars', async () => {
+    const local = store({ [PATH]: plan(row(1, 'A')) })
+    const remote = store({})
+    remote.readSidecar = async () => { throw new Error('reconnect-required') }
+    await expect(syncOnce(local, remote, 1000)).rejects.toThrow('reconnect-required')
+    expect(local.get(PATH)).toBe(plan(row(1, 'A')))
+    expect(local.get(sidecarPath(PATH))).toBeUndefined()
+    expect(remote.files.size).toBe(0)
+  })
+
+  it('a malformed sidecar is an error, not an empty set of clocks/tombstones', async () => {
+    const local = store({ [PATH]: plan(row(1, 'A')) })
+    const remote = store({ [PATH]: plan(row(2, 'B')), [sidecarPath(PATH)]: '{broken' })
+    await expect(syncOnce(local, remote, 1000)).rejects.toThrow('Cannot read sync sidecar')
+    expect(local.get(PATH)).toBe(plan(row(1, 'A')))
+    expect(remote.get(PATH)).toBe(plan(row(2, 'B')))
+  })
+
+  it('imports in-place cloud edits without treating absent cloud rows as deletions', async () => {
+    const local = store({ [PATH]: plan(row(1, 'Original'), row(2, 'Keep')) })
+    const remote = store({})
+    await syncOnce(local, remote, 1000)
+    remote.files.set(PATH, plan(row(1, 'Changed directly in cloud')))
+    await syncOnce(local, remote, 2000)
+    expect(local.get(PATH)).toContain('Changed directly in cloud')
+    expect(local.get(PATH)).toContain(row(2, 'Keep'))
+    expect(remote.get(PATH)).toContain(row(2, 'Keep'))
+  })
+
   it('first push: empty remote receives local content + sidecar', async () => {
     const local = store({ [PATH]: plan(row(1, 'A'), row(2, 'B')) })
     const remote = store({})

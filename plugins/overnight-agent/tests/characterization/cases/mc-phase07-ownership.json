@@ -1,0 +1,45 @@
+{
+  "fixture": "mc-phase07-ownership",
+  "covers": [
+    "mutcheck-phase07-ownership"
+  ],
+  "cases": [
+    {
+      "id": "mc/phase07-ownership/unbound-resolve-is-readonly",
+      "note": "PHASE 0.7 resolving an unbound task does not create or bind a doc.",
+      "tool": "oa-state",
+      "command": "doc",
+      "args": {
+        "Id": "940"
+      }
+    },
+    {
+      "id": "mc/phase07-ownership/scan-keeps-unbound-live-task",
+      "note": "scan still reports an unbound live task on the worklist rather than skipping it for lacking a doc.",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/phase07-ownership/explicit-bind-is-separate-owner",
+      "note": "Binding occurs only when an explicit owner calls doc -DocId; it is visible to later resolves.",
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "942",
+            "DocId": "DOC942",
+            "DocUrl": "https://docs.google.com/document/d/DOC942/edit"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "942"
+          }
+        }
+      ]
+    }
+  ]
+}

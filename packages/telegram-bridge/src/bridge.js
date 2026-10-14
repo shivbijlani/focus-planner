@@ -1501,6 +1501,13 @@ export function createBridge({
   async function syncDown() {
     const folded = []
     const unrouted = []
+    const ownerUserId = config.ownerUserId
+    const canFold = Number.isSafeInteger(ownerUserId) && ownerUserId > 0
+    if (!canFold) {
+      logger(
+        'syncDown cannot fold replies: TELEGRAM_BRIDGE_OWNER_USER_ID is missing or invalid; messages will be left unrouted',
+      )
+    }
     const offset = state.updateOffset > 0 ? state.updateOffset : undefined
     const updates = await client.getUpdates({
       offset,
@@ -1524,6 +1531,11 @@ export function createBridge({
       if (!text || !text.trim()) continue
       // Ignore the service message that opens a forum topic.
       if (msg.forum_topic_created) continue
+      if (!canFold || !Number.isSafeInteger(msg.from && msg.from.id) || msg.from.id !== ownerUserId) {
+        unrouted.push({ text, messageId: msg.message_id, threadId: msg.message_thread_id ?? null })
+        logger(`non-owner Telegram reply left unrouted: ${text.slice(0, 80)}`)
+        continue
+      }
 
       // A reply inside a task's topic is unambiguous — it answers that task.
       const topicTaskId =
@@ -1562,7 +1574,11 @@ export function createBridge({
           logger(`no journal for task #${entry.taskId}; reply left unrouted`)
           continue
         }
-        const updated = appendUserReply(content, { text: entry.text, date: day })
+        const updated = appendUserReply(content, {
+          text: entry.text,
+          date: day,
+          senderId: ownerUserId,
+        })
         await io.writeJournal(entry.taskId, updated)
         // The user has spoken about this task, so it is a live conversation even
         // if the task itself is closed. Without this, the completed-board guard

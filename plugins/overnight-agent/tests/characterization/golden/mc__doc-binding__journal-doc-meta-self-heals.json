@@ -1,0 +1,52 @@
+{
+  "files": {
+    "state/task-904.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "doc": {
+          "bound_at": "<NOW+0m>",
+          "doc_id": "DOC904",
+          "doc_url": "https://docs.google.com/document/d/DOC904/edit",
+          "observed_at": "",
+          "pending_ids": [],
+          "seen_ids": []
+        },
+        "has_agent_block": false,
+        "id": "904",
+        "plan_id": "",
+        "processed_file_hash": "",
+        "seeded": false,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    }
+  },
+  "id": "mc/doc-binding/journal-doc-meta-self-heals",
+  "steps": [
+    {
+      "args": {
+        "Id": "904"
+      },
+      "command": "doc",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "doc_id": "DOC904",
+        "doc_url": "https://docs.google.com/document/d/DOC904/edit",
+        "healed": true,
+        "id": "904",
+        "journal_stamp_mismatch_id": null,
+        "journal_stamped": true,
+        "new_comment_ids": null,
+        "new_comments": 0,
+        "observation": null,
+        "observed_at": null,
+        "seen_comments": 0,
+        "source": "journal"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

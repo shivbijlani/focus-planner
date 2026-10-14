@@ -5,9 +5,8 @@
  * (or a small object describing extra side-effects that the caller must
  * perform — e.g. completed-task entries to write to a different file).
  *
- * Keeping these pure lets us reuse the exact same algorithms from both the
- * single-source FocusPlanView and the multi-source Combined view (where
- * each operation routes to whichever source the rawLine belongs to).
+ * Keeping these pure separates markdown transformations from UI and storage
+ * concerns.
  */
 import { diag, isDiagEnabled } from '../packages/diagnostics/src/index.js'
 import {

@@ -1,3 +1,5 @@
+import { fencedLineMask } from '../packages/docs-core/src/grammar.js'
+
 // Pure helpers for rendering journal markdown as a chat thread.
 // Kept dependency-free so they can be unit tested without React.
 
@@ -54,42 +56,9 @@ const FROM_RE = /^<!--\s*from:\s*([^\s>]+)\s*-->/i
 // same rule. Keeping the two in step matters: when one reader thinks a quoted marker is real
 // and the other does not, they disagree about who wrote a message -- and the thing they
 // disagree about is whether Shiv approved something.
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/
-const FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
-
-// Mark every line that belongs to a fenced block (delimiters included). Returns a boolean
-// array parallel to `lines`, so callers keep their own indices and offsets unchanged.
-//
-// Deliberately ONE implementation shared by the parser and the writer below. They ask the
-// same question -- "is this line markup or quoted text?" -- and two copies of a subtle
-// CommonMark rule is how they drift back apart.
-export function fencedLineMask(lines) {
-  const mask = new Array(lines.length).fill(false)
-  let inFence = false
-  let fenceChar = ''
-  let fenceLen = 0
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].replace(/\r$/, '')
-    if (!inFence) {
-      const m = line.match(FENCE_OPEN_RE)
-      if (!m) continue
-      const [, delim, info] = m
-      // A backtick fence may not carry a backtick in its info string (CommonMark), which
-      // keeps inline code such as `a``b` from opening a block.
-      if (delim[0] === '`' && info.includes('`')) continue
-      inFence = true
-      fenceChar = delim[0]
-      fenceLen = delim.length
-      mask[i] = true
-    } else {
-      mask[i] = true
-      const c = line.match(FENCE_CLOSE_RE)
-      if (c && c[1][0] === fenceChar && c[1].length >= fenceLen) inFence = false
-    }
-  }
-  // An unterminated fence runs to end of input, matching Get-FenceMaskedText.
-  return mask
-}
+// The fence rule now lives in packages/docs-core (shared with the Docs app's doc.md parser,
+// plans/docs-app-design.md action item 2) so the journal and Docs readers cannot drift.
+export { fencedLineMask }
 const DATE_RE = /^##\s+(\d{4}-\d{2}-\d{2})\b/
 // Any `## ` heading (dated or not) ends the preceding marker's ownership.
 const HEADING_RE = /^##\s/
@@ -204,9 +173,45 @@ export function parseJournalChat(content) {
 // approval typed in the app. The emitted shape is byte-identical to the Telegram
 // bridge's `appendUserReply`, so an approval reads the same from either channel.
 // Historical unmarked entries are never rewritten; only new text is stamped.
-export function appendJournalMessage(content, text, today = localISODate()) {
+/**
+ * Append a chat message to a journal.
+ *
+ * `author` decides the provenance marker, and it defaults to the human because the
+ * composer's overwhelmingly common caller IS the human typing in the app.
+ *
+ * WHY THIS IS A PARAMETER AT ALL (GH #641)
+ * ----------------------------------------
+ * An agent driving the UI writes through this same composer, and every entry landed
+ * stamped `<!-- from: me -->` — which means THE HUMAN. Agent prose then sits in the
+ * journal indistinguishable from something Shiv typed, in the file that is the consent
+ * and instruction channel. Worse, consecutive same-day entries merge into one bubble by
+ * design, so an agent note silently fuses into the same user-attributed block as anything
+ * he wrote that day.
+ *
+ * That is not cosmetic. `write-turn.ps1` refuses an unstamped turn on the explicit
+ * grounds that "an unstamped turn can be read back as his approval", and
+ * `oa-state.ps1 extract` splits the journal into user messages vs agent turns using
+ * exactly these markers, with later runs acting on the user-attributed text as
+ * instruction. The script path was airtight while the UI path wrote human-attributed
+ * text with no guard at all — measured live on task #483, where the agent's own inference
+ * about flight dates became, on disk, a constraint from Shiv.
+ *
+ * So attribution becomes POSITIVE (#442): a client says who it is, rather than
+ * provenance being inherited from which widget did the writing.
+ *
+ * The default stays `me` deliberately. Flipping it would silently re-attribute every
+ * existing caller, and a marker that is wrong in the other direction is just as bad —
+ * it would drop the user's real instructions out of the channel that reads them.
+ */
+export function appendJournalMessage(content, text, today = localISODate(), author = 'me') {
   const body = (content || '').replace(/\s+$/, '')
   const lines = body.split(/\r?\n/)
+  // The marker this write will claim. Normalised and validated: a marker is machine-read
+  // by several independent parsers, so an author string carrying a newline or `-->` could
+  // terminate the comment early and forge a different attribution downstream.
+  const who = String(author || 'me').trim().toLowerCase()
+  const safeWho = /^[a-z0-9][a-z0-9 _-]*$/.test(who) ? who : 'me'
+  const marker = safeWho === 'me' ? FROM_ME : `<!-- from: ${safeWho} -->`
   // Fenced lines are quoted text, not markup (#320) — a `## <date>` inside an example
   // must not be mistaken for the journal's newest day, which would merge today's message
   // under a heading that does not exist.
@@ -217,29 +222,79 @@ export function appendJournalMessage(content, text, today = localISODate()) {
     const m = lines[i].trim().match(DATE_RE)
     if (m) { lastDate = m[1]; break }
   }
-  // Whether a `<!-- from: me -->` marker still owns the end of the file. Any
+  // Whether a marker for THIS AUTHOR still owns the end of the file. Any
   // `## ` heading ends the previous marker's ownership, so only a marker that is
   // the last governing token can carry the new text's attribution. When one
   // does, merging under it is already attributed and needs no second marker.
+  //
+  // #641: this now tracks WHICH author owns the tail, not merely whether the tail is
+  // human-owned. Without that, an agent write following a human message would merge
+  // silently into his block — the exact fusion this issue reports, reached by a different
+  // route than the hardcoded marker.
   //
   // Fenced lines are skipped (#320): a marker quoted in an example is not a marker.
   // Reading one as real makes this writer conclude the text is already attributed and
   // omit the marker -- while the consent gate, which masks fences, sees unattributed
   // text and fails closed. The user's approval is then dropped by the disagreement
   // between the two readers rather than by either one being wrong on its own.
-  let attributed = false
+  let owner = null
   for (let i = 0; i < lines.length; i++) {
     if (attrMask[i]) continue
     const t = lines[i].trim()
     const fm = t.match(FROM_RE)
-    if (fm) { attributed = fm[1].toLowerCase() === 'me'; continue }
-    if (AGENT_SENTINEL_RE.test(t) || HEADING_RE.test(t)) attributed = false
+    if (fm) { owner = fm[1].trim().toLowerCase(); continue }
+    if (AGENT_SENTINEL_RE.test(t) || HEADING_RE.test(t)) owner = null
   }
+  const attributed = owner === safeWho
   let addition
-  if (lastDate !== today) addition = `\n\n## ${today}\n\n${FROM_ME}\n${text}`
+  if (lastDate !== today) addition = `\n\n## ${today}\n\n${marker}\n${text}`
   else if (attributed) addition = `\n${text}`
-  else addition = `\n\n${FROM_ME}\n${text}`
+  else addition = `\n\n${marker}\n${text}`
   return `${body}${addition}\n`
+}
+
+// The markdown a journal todo has to be written as, and the one thing #645 exists to stop
+// people typing by hand. Kept next to the writer rather than in the component, because the
+// EXTRACTOR's rule is strict and non-obvious: `server.js` matches `/^-\s*\[([ x])\]\s*(.+)/`,
+// anchored at column 0 with text REQUIRED after the box. So a todo that is indented, or that
+// is appended to the end of an existing sentence, is not a todo to anything that reads the
+// file afterwards -- it merely looks like one in the composer.
+export const TODO_PREFIX = '- [ ] '
+
+// Insert a well-formed, empty todo line into a composer draft.
+//
+// COMPOSER-ONLY, resolving the issue's first open question in the direction it leans. Writing
+// straight to the file would add a SECOND writer to a file the agent also appends to, and the
+// append path already carries the attribution rule (#641): text sent from here goes through
+// appendJournalMessage as `me`, so a todo typed this way is his by construction rather than by
+// the button remembering to say so.
+//
+// Always starts its own line. Appending to a non-empty draft with a space -- which is what the
+// attachment inserter does, and the obvious thing to reuse -- would produce `note - [ ] buy
+// milk`, which renders as prose and is invisible to /api/todos. That is the failure this
+// button exists to prevent, so it cannot be the way the button works.
+export function insertTodoLine(draft) {
+  const text = draft || ''
+  // Pressing it twice should not stack empty boxes: an unfilled box is debris in a file he
+  // has to read, and the cursor is already on the open line, which is what he wanted.
+  const lastLine = text.split(/\r?\n/).pop()
+  if (lastLine.trim() === TODO_PREFIX.trim()) return text
+  if (!text) return TODO_PREFIX
+  return /\n$/.test(text) ? `${text}${TODO_PREFIX}` : `${text}\n${TODO_PREFIX}`
+}
+
+// Drop todo lines the user never filled in, before the draft is written to the journal.
+//
+// MEASURED, not assumed: `- [ ] ` with its trailing space DOES match the extractor's
+// `/^-\s*\[([ x])\]\s*(.+)/` -- `\s*` gives the space back to `(.+)`, so the line extracts as
+// a real todo whose text is empty. Only a box with NO trailing space fails to match, and that
+// is not the markdown to write. So a button that inserts a box, left untyped and sent, would
+// put a blank row in the task list: the button would create the mess it exists to save him
+// from. Stripping at the write boundary rather than at insert keeps the empty line available
+// to type into for as long as the draft is open.
+export function stripEmptyTodoLines(text) {
+  const kept = (text || '').split(/\r?\n/).filter((l) => !/^\s*[-*]\s*\[[ xX]\]\s*$/.test(l))
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
 // Build the close-out comment written to a task journal when a task is

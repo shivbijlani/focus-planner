@@ -20,8 +20,13 @@ preferences.
 | Journals folder | `<path to>\journal\` |
 | Agent state store | `%LOCALAPPDATA%\overnight-agent\state\` (per-task JSON; **local, not cloud-synced**). Skill-owned memory — the user never edits it. Managed via `oa-state.ps1`. |
 | Dev drive (repos) | `<path to your repos, e.g. V:\repos\>` (worktrees in `<...>.worktrees\`, packages in `<...>\packages\`) |
+| Non-code task project | `<project ID from create_project>` — local folder project rooted at `%LOCALAPPDATA%\overnight-agent\task-chats`; required before dispatching non-code tasks. |
 | GitHub owner | `github.com/<your-github-username>` |
-| Agent email account | `<agent-inbox@example.com>` (the name of this account as it appears in the email MCP) |
+| Agent email account | `<agent-send-as@example.com>` — verified Gmail Send As alias; pass explicitly as `from_email` on every send/draft. |
+| Agent email Google account | `<backing-account@gmail.com>` — authorized backing Gmail identity for `google-workspace-agent-email`; never the personal productivity account. |
+| Critical tools | `google-workspace-agent-email, google-workspace` — comma-separated MCP server names from `~\.copilot\mcp-config.json`. Unknown names are refused by name. Browser slots are deliberately not critical by default. |
+| Critical alert Telegram DM | *(optional)* your private chat ID, not the mirror's forum-group ID. Used for outage alerts, especially when email is down. |
+| Critical alert email | *(optional)* your own email address; defaults to Agent email account when that is an address. Used when Telegram is not configured or is down. |
 | Google account (Tasks) | `<your.name@example.com>` — the Google account whose **Tasks** the PHASE 2 collect step reads (must be consented in the Google Workspace MCP). Leave blank / omit to disable Google-Tasks collection. |
 | Google Tasks lists | *(optional)* `default only` — set this if `@default` **is** your whole Google Tasks backlog. The Google Workspace MCP exposes no way to enumerate task lists (GH #554), so without this the collector reports `partial` and refuses a total every night. With it, the same read counts as complete. Leave blank if you keep tasks in more than one list. |
 | Authorized sender addresses | `<addr1@example.com>`, `<addr2@example.com>` (only act on instruction emails **from** these) |
@@ -37,7 +42,7 @@ the end of every run (SKILL.md → "PHASE 3 — Mirror to Telegram"). Leave `Ena
 | Enabled | `off` (set to `on` to turn on the mirror) |
 | Chat id | `<forum supergroup id, e.g. -1004310604015>` (the group must have **Topics** enabled) |
 | Bot token | Stored in the OS credential vault, **never here** — read at run time via `%LOCALAPPDATA%\overnight-agent\secrets\telegram-secret.ps1 get`. |
-| Bridge CLI | `<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js` (dependency-free Node CLI). |
+| Bridge CLI | `%LOCALAPPDATA%\overnight-agent\telegram-bridge\bin\telegram-bridge.js` (PHASE 0 deploys this dependency-free Node CLI from `origin/main`). |
 | Tasks | *(optional)* comma-separated task IDs to mirror; empty = every task that has an agent block. |
 | Archive completed topics | `on` (default once Telegram is added) — close a task's topic when it reaches the completed board, reopen it if the task leaves. Set to `off` to disable. |
 
@@ -51,28 +56,29 @@ a value here takes effect on the next run with nothing else to change.
 | --- | --- |
 | Today gate backstop | `6h` — if **nothing** has been written to a Today task for this long, the agent stops waiting on it and works the backlog. Guards against a run that jams. Accepts `6`, `6h`, or `off` to disable. |
 | Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
-| Overnight Agent concurrency | `1` |
+| Overnight Agent concurrency | `1` — maximum accepted task-session sends active at once; refill an opening until the start cutoff. |
 | Overnight Agent start buffer | `5m` |
+| Overnight Agent model | `auto` |
 
-**Concurrency is the drain width within each run, not a total-start quota.** At `1`, each completed
-task is followed by the next eligible prepared task; at `2`, either opening is refilled independently.
-The run stops sending at the next :00/:30 after its first prompt, **minus the start buffer**.
-At the default `5m`, a 10:30 next run means no new instruction at or after 10:25.
-Already-running tasks are left alone. Earlier tasks do not reserve the new run's openings.
-Human collect requests remain an explicit width exception, but never bypass pauses or the cutoff.
-Use a bare whole number for concurrency.
+**Model:** `auto` is the default when the row is absent. A malformed value falls back to
+`auto` and is reported as `settings-malformed` by `scan` and `session`.
+
+**Concurrency is the maximum number of task-session sends in one run.** Each attempted send counts
+toward the limit; completion does not refill it. A later run may continue a task without waiting
+for earlier task sessions to finish. Use a bare whole number. A missing, unreadable or malformed
+value resolves to `1`, and the run reports `concurrency_source` so a narrowed default is visible.
 
 **Start buffer:** whole minutes from `0` to `29`, optionally followed by `m`. `0m` disables the
-buffer. A missing row/file defaults to `5m`; an invalid value or unreadable existing file is
-reported and prevents a new drain from starting. The buffer is fixed when a run enrolls:
-changing it applies to new runs, never extends a running/reloaded run. This reduces overlap;
-it is not a task timeout or proof that a task finished within five minutes.
+buffer. If the row is absent, use `5m`. Before each task-session send, the coordinator checks the
+next local :00/:30 after its first prompt, minus this buffer; a 10:30 next run means no send at or
+after 10:25. An unreadable or invalid existing value means do not send and report the problem.
+This is coordinator guidance, not an extension timer or a task timeout.
 
 **Raising the backstop makes the agent wait longer before giving up on a stuck Today task; lowering
 it makes it give up sooner.** Writing to the task *resets* the timer, so the agent can only ever
 delay this release, never trigger it.
 
-**The drain width fails narrow on purpose.** A missing row, an unreadable file or a value the agent
+**The dispatch limit fails narrow on purpose.** A missing row, an unreadable file or a value the agent
 can't parse all give you `1` — never more. If it
 falls back, it says so in the run summary rather than quietly pretending you asked for `1`.
 
@@ -92,9 +98,13 @@ falls back, it says so in the run summary rather than quietly pretending you ask
 - **Email replies / sends:** `allowed` to anyone on the **Auto-send allow-list** above — keep replies
   short. Emailing anyone **not** on that list still needs explicit approval.
 - **Email format:** `html` — send all emails (new sends, replies, forwards) as HTML with a plain-text
-  fallback. Set to `plain` for plain-text only.
+  fallback. The Gmail connector generates the text alternative from the HTML. Append the explicit
+  signature `🤖 on behalf of Shiv` to every message, and set `include_signature: false`; do not depend
+  on Gmail's stored signature. Set to `plain` only by explicit user preference (signature still required).
 - **Browser automation:** use a **Playwright MCP browser slot** — never the agent's built-in browser.
-- **Secrets:** never stored in this repo. Email credentials live in the email MCP's own store.
+- **Secrets:** never stored in this repo. Agent Gmail credentials belong to the separately authorized
+  `google-workspace-agent-email` connector. Personal `google-workspace` remains Tasks/Docs/Drive/Calendar,
+  not Gmail. No legacy email/Zoho fallback.
 
 ## Browser slots
 
@@ -102,65 +112,152 @@ falls back, it says so in the run summary rather than quietly pretending you ask
 slot list is hard-coded in any of them.** Add a row to add a browser; delete a row to remove one. No
 script needs editing either way.
 
-**One row = one slot = one identity.** A slot is a browser the agent drives on your behalf, running its
-own dedicated profile directory on its own CDP debug port. Two slots that share a profile are the same
-identity twice over and are pure cost (~6 processes and ~400 MB each at startup, plus ~24 duplicate tool
-schemas each in the agent's context), so only add a slot when it represents an account the others
-cannot stand in for.
+**One row = one slot = one identity.** A slot is a browser the agent drives on your behalf. Each slot's
+MCP server launches its **own** dedicated profile directory directly (`--browser msedge --user-data-dir
+<dir>`, GH #738) — it does not attach to anything else, and nothing else attaches to it. Two slots that
+share a profile are the same identity twice over and are pure cost (~6 processes and ~400 MB each at
+startup, plus ~24 duplicate tool schemas each in the agent's context), so only add a slot when it
+represents an account the others cannot stand in for.
 
-| Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
-| --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | MCP Edge 1 (CDP 9225) |
+| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into |
+| --- | --- | --- | --- |
+| `edge-cdp-1` (regular) | `edge1` | `<your main account>` | *(sites this profile is signed into)* |
 
 **The columns**
 
 | Column | Required | What it means |
 | --- | --- | --- |
 | **Slot** | **yes** | The MCP server name, so it must match the key in `~\.copilot\mcp-config.json`. A trailing `(alias)` is optional and gives you a friendly second name to select by. |
-| **Port** | **yes** | The CDP debug port. Must be unique across rows and otherwise unused on your machine. |
 | **Profile dir** | **yes** | **This is the identity.** A bare name (`edge1`) is resolved under the base folder named in this column's own header; a full path (`D:\browsers\work`) or one with `%VARS%` is used as-is. Must be unique across rows. |
 | **Account** | no | A label for you and for the agent to select by (e.g. `work`, `personal`). Purely descriptive. |
-| **Desktop shortcut** | no | The shortcut name to tell you to open if an automatic launch fails. Defaults to the slot name. |
+| **Signed into** | no | Which sites this profile is already signed into (e.g. `Amazon, WhatsApp Web`), so a task can pick the right slot for the site it needs without guessing or discovering it by trial and error. |
+| **Desktop shortcut** | legacy | Kept only for reading older tables; ignored by the installer. Shortcuts are named `Browser - <Account>`; if Account is blank, the slot name is used. |
+| ~~Port~~ | *(retired)* | GH #738 removed CDP-attach mode, so a slot no longer needs a debug port. A table carried over from before that change may still have a Port column — it is tolerated for backward compatibility, but a new slot does not need one. |
 
-Only **Slot**, **Port** and **Profile dir** are required, and the column **order does not matter** —
-columns are found by name. The profile base folder is taken from the Profile column's header, so
-changing `%LOCALAPPDATA%\playwright-mcp\` there moves every bare-name slot at once. A slot whose name or
-profile contains `chrome` launches Chrome; anything else launches Edge.
+Only **Slot** and **Profile dir** are required, and the column **order does not matter** — columns are
+found by name. The profile base folder is taken from the Profile column's header, so changing
+`%LOCALAPPDATA%\playwright-mcp\` there moves every bare-name slot at once. A slot whose name or profile
+contains `chrome` launches Chrome; anything else launches Edge.
 
 **Adding more identities** — one row each. For example, a three-identity setup:
 
 ```
-| Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
-| --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | 9225 | `edge1`      | personal | MCP Edge 1 (CDP 9225) |
-| `edge-cdp-work`        | 9228 | `edge-work`  | work     | MCP Edge work (CDP 9228) |
-| `edge-cdp-client`      | 9229 | `edge-client`| client   | MCP Edge client (CDP 9229) |
+| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into |
+| --- | --- | --- | --- |
+| `edge-cdp-1` (regular) | `edge1` | personal | Amazon |
+| `edge-cdp-work` | `edge-work` | work | (not yet signed in) |
+| `edge-cdp-client` | `edge-client` | client | (not yet signed in) |
 ```
 
-The table is **refused rather than guessed at** if it is missing, has no Slot/Port/Profile columns, has
-no rows, or has two rows sharing a port or a profile dir. A silent fallback to a stale built-in list is
-exactly how this drifts out of date without anyone noticing, so the scripts fail loudly instead.
+The table is **refused rather than guessed at** if it is missing, has no Slot/Profile columns, has no
+rows, or has two rows sharing a profile dir (or, for a legacy table that still carries one, a port). A
+silent fallback to a stale built-in list is exactly how this drifts out of date without anyone noticing,
+so the scripts fail loudly instead.
 
 **Rules for the agent:**
 
-1. **Resolve the *profile*, not the slot name.** Pick the slot by which account the task needs. Never
-   substitute a different account's profile for the requested one — that produces actions taken as the
-   wrong identity, which is worse than failing.
-2. **Launch on demand.** A closed slot answers `ECONNREFUSED`. That is **not** a task failure — run
-   `ensure-mcp-browsers.ps1 -Slot <name|account|profile|port>`, wait for the port, then continue. Only if
-   the launch fails, or the profile needs an interactive sign-in the agent cannot perform, set `blocked`
-   with that one ask.
+1. **Resolve the *profile*, not the slot name.** Pick the slot by which account (and, from the
+   **Signed into** column, which site) the task needs. Never substitute a different account's profile for
+   the requested one — that produces actions taken as the wrong identity, which is worse than failing.
+2. **Profile already in use → stop, don't retry.** Launching a profile that is already open (by you, or
+   by another task session) fails with "profile is already in use" (proven 2026-09-28, test session
+   905cc615) — this is not a task failure to route around. Stop the run for this task, report "profile in
+   use (you, or another task)", and set `blocked` with that one ask. Never retry-loop, and never fall back
+   to a different profile.
 3. **Sign-in is one-time per profile, by you.** Chrome/Edge 127+ bind cookies to the profile directory
    (App-Bound Encryption), so a newly created or copied profile carries the password vault but starts
-   **logged out**. The agent must never type a master password.
-4. **Preflight before browser work:** `check-browser-slots.ps1` (`-Json`; exit 0 = ok, 2 = attention). It
-   derives its slot list from **this table** and is strictly **read-only** — it never launches or kills
-   one of your windows, because they may hold in-flight state.
-5. **Zombie slot after a browser auto-update:** port open and `/json/version` answering, but every *new*
-   tab dies with `Target crashed`, because the running process is pinned to the pre-update version
-   directory. Detected by comparing the build at `/json/version` with the installed browser's version.
-   Fix: close that window and reopen its shortcut — sign-ins persist, since the cookies live with the
-   profile directory, not the process.
+   **logged out**. The agent must never type a master password. Use the profile's desktop shortcut for a
+   one-time interactive sign-in — it opens with **no** debug port, so it is a normal browser window.
+4. **Preflight before browser work:** `check-browser-slots.ps1` (`-Json`). It derives its slot list from
+   **this table** and is strictly **read-only** — it never launches or kills one of your windows, because
+   they may hold in-flight state. It reports which profiles exist and which are currently in use.
+5. **Per-task windows, and reopening on the next run.** Each task's browser work opens in its **own
+   window** (not a shared one), and the task saves the URLs it was working on to its own state when its
+   turn ends. A relaunch restores **no** previous tabs on its own (there is no CDP session to reattach to),
+   so the next run reopens those saved URLs in a fresh window. Real tab groups are extension-only (GH
+   #383) and out of scope.
+
+## Tray reliability supervision
+
+*(Optional — the whole section can be omitted.)* Policy for the **optional reliability
+supervision tray** (plugin README → "Optional reliability supervision tray"), which
+preventively restarts the GitHub Copilot desktop app. **This section is the source of truth
+for that policy**: `%LOCALAPPDATA%\overnight-agent\reliability-supervisor.json` is derived
+from it on every evaluation, so hand-editing that JSON has no lasting effect.
+
+**Omit the section — or any single row — and the shipped defaults below apply.** Installing
+the tray is itself the opt-in; `Enabled = off` turns the workload off without uninstalling.
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` — supervise the desktop app. `off` stops the checks without removing the tray. |
+| Quiet opportunity (M) | `3h` — earliest preventive restart, and only during a verified quiet window. |
+| Hard deadline (N) | `4h` — restart regardless of activity evidence. Omit this row and N is derived from M. |
+| Quiet window | `15m` — continuous quiet required before a preventive (non-deadline) restart. |
+| Restart cooldown | `60m` — never restart more than once per this interval. |
+
+Durations accept `3h` or `180m` (a bare number means the unit named in the row). `Enabled`
+accepts `on`/`off`. A row that cannot be read — an unknown setting name, an out-of-range
+value, or an `N` that does not exceed `M` — is **refused by name**, and supervision declines
+to act rather than acting on a guessed policy.
+
+The tray's **Pause** menu item is deliberately *not* a setting: it lives in memory for the
+lifetime of that tray process only, so restarting the tray always resumes supervision.
+
+Each tray workload owns its **own** `##` section here (the browser checks and the update
+checks below are separate, sibling sections). One tray host, independent workloads,
+separate policies — a missing section for one workload never affects another.
+
+## Tray browser checks
+
+*(Optional — the whole section can be omitted.)* Policy for the **browser-check workload** of
+the same optional tray. The tray is the **only** resident dispatcher for browser checks (no
+Scheduled Task, Startup shim or VBS launcher); `/browser-watchdog` stays available on demand.
+The slots it checks are always the **`## Browser slots`** table above — nothing here lists a slot.
+
+GH #738 switched every Playwright MCP slot from attach-only (`--cdp-endpoint`) to launching its
+own profile directly, so there is no shared browser left for this workload to launch or thaw on
+your behalf — each MCP server owns its browser for the length of one session.
+
+**Completely off by default, including observation.** Omit the section, omit a row, or set
+`Enabled = off` and no profile is checked at all. `Enabled = on` by itself still runs nothing:
+`Observe` is the one remaining opt-in.
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `off` — master switch for tray browser checks. |
+| Observe | `off` — read-only check of every slot: which profiles exist, and whether each is currently in use. Status shows in the tray. |
+| Check interval | `60m` — minutes between checks (15m to 24h). |
+
+Switches accept `on`/`off`; a row that cannot be read is **refused by name** and no browser
+check runs. This workload shares **no** state, lock, pause or cooldown with the reliability
+workload above. The tray never launches, kills, closes or restarts a browser or MCP worker
+process, and
+its **Pause browser checks** menu item lives in memory only — restarting the tray clears it.
+
+## Tray update checks
+
+*(Optional — the whole section can be omitted.)* Policy for the **plugin update-check
+workload** of the same optional tray. It asks the **Copilot plugin marketplace** (and nothing
+else) whether a newer `overnight-agent` is available, via `copilot plugin marketplace list`,
+`copilot plugin list` and — only with Auto apply — `copilot plugin install
+overnight-agent@focus-planner`. It never runs git or fetches `origin/main`.
+
+**Omit the section — or any single row — and the defaults below apply:** on, daily, and
+**report only**. With `Auto apply = off` the tray only shows *update available*; nothing is
+installed until you opt in.
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` — check for plugin updates from the tray. |
+| Check interval | `daily` — also `hourly`, `weekly`, or a duration from `60m` to `168h` such as `6h`. |
+| Auto apply | `off` — `on` installs a newer marketplace version and re-checks the installed version. |
+| Source | `marketplace` — the Copilot plugin marketplace; the only supported source. |
+
+A row that cannot be read is **refused by name** and no check runs. This workload has its own
+state (`update-check-state.json`), lock and interval, and shares **no** state, lock, pause or
+cooldown with the reliability or browser workloads. Its **Pause update checks** menu item
+lives in memory only — restarting the tray clears it.
 
 ## Where your real settings live
 

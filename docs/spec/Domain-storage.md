@@ -1,10 +1,10 @@
 # Domain: storage
 
-The `storage` domain gives the rest of the planner one filesystem-like API while hiding whether the actual backing store is browser IndexedDB, File System Access, OneDrive App Folder, or Google Drive. It also owns the source registry, diagnostics, sync-status translation, and small JSON sidecars stored next to the board. This domain is where user data durability, sync visibility, and cross-source composition are made explicit. See [Architecture](Architecture), [Reliability](Reliability), and [Domain-root](Domain-root).
+The `storage` domain gives the rest of the planner one filesystem-like API while hiding whether the actual backing store is browser IndexedDB, File System Access, OneDrive App Folder, or Google Drive. A deployment profile chooses the ordered provider types the UI may offer; the registry resolves each type to an extension factory and filters the picker and Settings to the profile's allowed list. Exactly one saved provider is active for the board; other saved choices remain available in Settings without being opened or modified. Sync targets and backups are separate: folder-sync replicates the active provider, while backup destinations are not board sources. This domain also owns diagnostics, sync-status translation, and small JSON sidecars stored next to the board. See [Architecture](Architecture), [Reliability](Reliability), and [Domain-root](Domain-root).
 
 ## Responsibility
 
-`src/storage/storage.js` is the façade. It selects the active provider, maps folder-sync engine state into planner-specific status values, routes writes through the sync engine, scaffolds agent docs, and exposes cross-source helpers for Combined view reads. The module header is intentionally short; the deeper rationale lives in comments inside the file. Examples: tombstoned task IDs are merged into journal-ID skip sets “so a freed ID is not reused while it could still be resurrected by sync”; `subscribeSyncStatus()` deduplicates value-identical status objects because forwarding every service-worker tick “makes React re-render the whole board on every tick”; `updateApp()` exists because installed PWAs do not reliably update service workers without a manual nudge.
+`src/storage/storage.js` is the façade. It selects the active provider, maps folder-sync engine state into planner-specific status values, routes writes through the sync engine, and scaffolds agent docs. `src/storage/registry.js` owns provider registration and profile-ordered lookup; the concrete providers are imported by the single startup module `src/storage/registerBuiltinProviders.js`, not by the shared storage core. An unknown provider type in the profile fails validation at startup. The module header is intentionally short; the deeper rationale lives in comments inside the file. Examples: tombstoned task IDs are merged into journal-ID skip sets “so a freed ID is not reused while it still could be resurrected by sync”; `subscribeSyncStatus()` deduplicates value-identical status objects because forwarding every service-worker tick “makes React re-render the whole board on every tick”; `updateApp()` exists because installed PWAs do not reliably update service workers without a manual nudge.
 
 ## Principal modules
 
@@ -16,12 +16,15 @@ The `storage` domain gives the rest of the planner one filesystem-like API while
 
 | Path | Role | Why it exists |
 | --- | --- | --- |
+| `src/config/profile.js` | Consumer deployment settings. | Selects the ordered provider allow-list, root-path policy, branding, install prompt and sync scheduler for the build. |
+| `src/storage/registry.js` | Provider type registry. | Keeps shared storage/UI code independent of provider implementation modules. |
+| `src/storage/registerBuiltinProviders.js` | Consumer provider bootstrap. | Registers IndexedDB, File System Access, OneDrive and Google Drive factories and validates the profile. |
 | `src/storage/storage.js` | Active-provider façade plus sync integration. | Keeps UI code provider-agnostic and preserves one source of truth for reads/writes. |
-| `src/storage/sources.js` | Source registry. | Supports multiple named sources while preserving single-source behaviour when only one exists. |
+| `src/storage/sources.js` | Saved provider choices and active-source selection. | Opens one provider for the board and retains other choices for nondestructive switching in Settings. |
 | `src/storage/indexeddb-provider.js` | Default local provider. | Replaces the older localStorage store with async, larger-quota IndexedDB. |
 | `src/storage/fsa.js` | File System Access helpers. | Persists a picked directory handle and operates on real local files. |
 | `src/storage/onedrive-provider.js` | OneDrive App Folder provider. | Uses Microsoft Graph + PKCE with sandboxed scope. |
-| `src/storage/google-drive-provider.js` | Google Drive provider. | Uses Drive API v3 + PKCE under a named root folder. |
+| `src/storage/google-drive-provider.js` | Google Drive board provider. | Uses Drive API v3 under a named root folder, with the OAuth 2.0 token model (no client secret): about 1-hour access tokens from the redirect fragment, and one silent `prompt=none` renewal per tab session. The shipped Backups path is the folder-sync `googleDrive.js` provider (appDataFolder). |
 | `src/storage/diagnostics.js` | Storage/sync diagnostics snapshot. | Produces a safe report for debugging missing journals, quota, and stale sync. |
 | `src/storage/taskSettings.js` | Per-task JSON sidecar. | Stores planner-owned AI toggles separately from human journal prose. |
 
@@ -37,14 +40,15 @@ The `storage` domain gives the rest of the planner one filesystem-like API while
 
 | Path | Exports from `spec-facts.json` |
 | --- | --- |
-| `src/storage/storage.js` | `PROVIDERS`, `TARGET_STATUS`, `checkJournal`, `checkJournalFromSource`, `configureLocalFirstStorage`, `connectSyncTarget`, `disconnectSyncTarget`, `ensureAgentsDoc`, `folderName`, `getActiveProvider`, `getAvailableProviders`, `getBuildId`, `getFiles`, `getFilesFromSource`, `getLocalFolderId`, `getProviderName`, `getSyncStatus`, `getTodos`, `getTodosFromSource`, `hasProvider`, `isSupported`, `journalIds`, `journalIdsFromSource`, `maxJournalId`, `maxJournalIdFromSource`, `onLocalChange`, `parseTodos`, `pick`, `read`, `readFromSource`, `registerSyncWorker`, `remove`, `removeFromSource`, `restore`, `restoreSyncTargets`, `scaffold`, `setActiveProvider`, `startAutoSync`, `subscribeSyncStatus`, `syncNow`, `syncStatusEqual`, `updateApp`, `write`, `writeToSource` |
-| `src/storage/sources.js` | `abortPendingAdd`, `addSource`, `availableProviderTypesForAdd`, `beginAddCloudSource`, `beginReauth`, `consumePendingAdd`, `consumePendingReauth`, `getActiveSource`, `getActiveSourceId`, `getProvider`, `getSources`, `hasPendingAdd`, `loadSources`, `makeProviderFor`, `migrateLegacy`, `removeSource`, `renameSource`, `restoreSource`, `setActiveSource` |
+| `src/storage/storage.js` | `PROVIDERS`, `TARGET_STATUS`, `checkJournal`, `configureLocalFirstStorage`, `connectSyncTarget`, `disconnectSyncTarget`, `ensureAgentsDoc`, `folderName`, `getActiveProvider`, `getAvailableProviders`, `getBuildId`, `getFiles`, `getLocalFolderId`, `getProviderName`, `getSyncStatus`, `getTodos`, `hasProvider`, `isSupported`, `journalIds`, `maxJournalId`, `onLocalChange`, `parseTodos`, `pick`, `read`, `registerSyncWorker`, `remove`, `restore`, `restoreSyncTargets`, `scaffold`, `setActiveProvider`, `startAutoSync`, `subscribeSyncStatus`, `syncNow`, `syncStatusEqual`, `updateApp`, `write` |
+| `src/storage/sources.js` | `addSource`, `chooseActiveSource`, `dismissMultiSourceNotice`, `getActiveSource`, `getActiveSourceId`, `getHiddenSources`, `getProvider`, `getSources`, `isMultiSourceNoticeDismissed`, `loadSources`, `makeProviderFor`, `restoreSource`, `setActiveSource` |
+| `src/storage/registry.js` | `createProvider`, `getEnabledProviderTypes`, `getProvider`, `listProviders`, `registerProvider`, `resetRegistryForTests`, `validateRegisteredProviders` |
 | `src/storage/indexeddb-provider.js` | `IndexedDbProvider`, `parseTodos` |
 | `src/storage/fsa.js` | `deleteFile`, `fileExists`, `forgetFolder`, `getJournalIds`, `getMaxJournalId`, `isSupported`, `journalExists`, `listFiles`, `parseTodos`, `pickFolder`, `readFile`, `restoreFolder`, `scaffoldIfEmpty`, `writeFile` |
 | `src/storage/onedrive-provider.js` | `OneDriveProvider` |
 | `src/storage/google-drive-provider.js` | `GoogleDriveProvider` |
 | `src/storage/diagnostics.js` | `clearDiagnosticEvents`, `formatDiagnosticsReport`, `gatherDiagnostics`, `getDiagnosticEvents`, `isDiagnosticsEnabled`, `recordDiagnosticEvent`, `setDiagnosticsEnabled` |
-| `src/storage/taskSettings.js` | `DEFAULT_TASK_SETTINGS`, `TASK_SETTINGS_FILE`, `__testing`, `getTaskSettings`, `moveTaskSettingsEntries`, `normalizeTaskSettingsFile`, `parseTaskSettingsFile`, `readTaskSettings`, `readTaskSettingsFromSource`, `serializeTaskSettingsFile`, `setTaskSetting`, `setTaskSettingInSource`, `withTaskSetting`, `withTaskSettingsMutationLock`, `writeTaskSettings`, `writeTaskSettingsToSource` |
+| `src/storage/taskSettings.js` | `DEFAULT_TASK_SETTINGS`, `TASK_SETTINGS_FILE`, `__testing`, `getTaskSettings`, `normalizeTaskSettingsFile`, `parseTaskSettingsFile`, `readTaskSettings`, `serializeTaskSettingsFile`, `setTaskSetting`, `withTaskSetting`, `writeTaskSettings` |
 
 </details>
 
@@ -79,6 +83,12 @@ Key behavioural coverage comes from `src/storage/cloud-provider.abort.test.js`, 
 - Diagnostics are **safe to share**. `src/storage/diagnostics.test.js` requires the enable flag to persist, the event buffer to cap at 100 entries, and reports to omit token values while still surfacing expiry and refresh-token presence.
 - Task settings are **lenient on read, strict on mutation**. `src/storage/taskSettings.test.js` requires corrupt or missing files to normalize during passive reads, but malformed existing documents to block overwriting during mutation; unknown per-task keys must round-trip for forward compatibility; concurrent toggles must serialize.
 - Sync status is **value-deduplicated**. `src/storage/syncStatus.test.js` and `src/storage/syncStatusCoalesce.test.js` require equality by meaningful status/message fields rather than object identity, immediate leading-edge updates, and coalesced trailing updates.
+- Provider registrations are **unique and profile-scoped**. `src/storage/registry.test.js` requires duplicate registration to fail, profile order to be preserved, and unknown profile provider types to fail validation.
+- Profile and host defaults are **consumer-compatible**. `src/config/profile.test.js` and `src/host/DefaultHostProvider.test.jsx` cover the current consumer defaults; `src/storage/profileProviderLists.test.jsx` verifies a local-only profile exposes only Browser Storage in the picker and provider list used by Settings.
+
+## Supplying another deployment
+
+Vite resolves `#planner/deployment-profile`, `#planner/host-provider`, and `#planner/storage-bootstrap` to consumer defaults. A build can replace those targets with `VITE_PROFILE_MODULE`, `VITE_HOST_PROVIDER_MODULE`, and `VITE_STORAGE_BOOTSTRAP_MODULE`, respectively, without changing shared application modules. The profile module exports a default profile; a host module exports `DefaultHostProvider` and `useHost`; a bootstrap registers provider factories with stable type IDs, labels, and capabilities. A custom provider intended to appear in Settings marks `settingsSource` in its capabilities, and uses `needsUserGesture` or `oauthRedirect` to describe its connection flow. Provider implementations stay behind that bootstrap seam. `VITE_DEPLOYMENT_PROFILE` selects the built-in `consumer-web` mode; the managed and managed-local deployments supply their own profile module and values. Provider type strings and persisted storage keys are contracts and must not be renamed.
 
 ## Failure modes
 

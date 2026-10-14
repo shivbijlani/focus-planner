@@ -1,0 +1,175 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-managed-heading"
+  ],
+  "cases": [
+    {
+      "id": "mc/managed-heading/second-turn-quiet",
+      "note": "A second managed Overnight Agent turn is not read as a user reply.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 901 | 🟡 | Task 901 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-901.md": "# Task 901: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nDid the first thing.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-901.json": {
+          "id": "901",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "1ef141a784dd52b133d52a7b60afd10be3b3ced65e79d0330bffe67cf96fe14e",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-901.md": "\n## 🌙 Overnight Agent\n\n<!-- from: overnight-agent -->\n**Status:** Done - plan v2 - 2020-03-02\n\n### Run log\n\n**2020-03-02 (overnight):**\n- Did the second thing.\n\n**Needs from you:** nothing. One optional check: is the account pre-tax or\nRoth? Reply and I will re-run it.\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "mc/managed-heading/ascii-second-turn-quiet",
+      "note": "The older glyph-free managed heading is also treated as agent-authored.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 902 | 🟡 | Task 902 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-902.md": "# Task 902: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nDid the first thing.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-902.json": {
+          "id": "902",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "fa8b7b670eba6e21b7bf60ad30001bada55d2e747e4e78596277e037d0cc428e",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-902.md": "\n## Overnight Agent\n\n<!-- from: overnight-agent -->\n**Status:** Done - plan v2 - 2020-03-02\n\n### Run log\n\n**2020-03-02 (overnight):**\n- Did the second thing.\n\n**Needs from you:** nothing. One optional check: is the account pre-tax or\nRoth? Reply and I will re-run it.\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "mc/managed-heading/reply-after-second-turn",
+      "note": "A real user reply below a second managed turn is still heard.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 903 | 🟡 | Task 903 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-903.md": "# Task 903: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nDid the first thing.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-903.json": {
+          "id": "903",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "f7e36b69cbf08baf22766af7b6e0df9169fbe30b752e91ce2ce45657b8613313",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-903.md": "\n## 🌙 Overnight Agent\n\n<!-- from: overnight-agent -->\n**Status:** Done - plan v2 - 2020-03-02\n\n### Run log\n\n**2020-03-02 (overnight):**\n- Did the second thing.\n\n**Needs from you:** nothing. One optional check: is the account pre-tax or\nRoth? Reply and I will re-run it.\n\n## 2020-03-02\n\n<!-- from: me -->\napprove the second plan\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "mc/managed-heading/sibling-after-second-turn",
+      "note": "A sibling skill below a settled two-turn journal stays quiet.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 904 | 🟡 | Task 904 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-904.md": "# Task 904: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nDid the first thing.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n\n## 🌙 Overnight Agent\n\n<!-- from: overnight-agent -->\n**Status:** Done - plan v2 - 2020-03-02\n\n### Run log\n\n**2020-03-02 (overnight):**\n- Did the second thing.\n\n**Needs from you:** nothing. One optional check: is the account pre-tax or\nRoth? Reply and I will re-run it.\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-904.json": {
+          "id": "904",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "4873a36675e6da86f80b30e794e22b64cdc0c6dc4cbe0059d45bef9daa34b9ee",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-904.md": "\n## 2020-03-02\n\n<!-- from: dance-church -->\nposted 3 classes\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "id": "mc/managed-heading/mark-stamps-second-turn",
+      "note": "mark can terminate a second managed turn append-only while preserving the moon glyph.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 905 | 🟡 | Task 905 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-905.md": "# Task 905: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** Done - plan v1\n\nDid the first thing.\n\n**Needs from you:** none\n\n## 🌙 Overnight Agent\n\n<!-- from: overnight-agent -->\n**Status:** Done - plan v2 - 2020-03-02\n\n### Run log\n\n**2020-03-02 (overnight):**\n- Did the second thing.\n\n**Needs from you:** nothing. One optional check: is the account pre-tax or\nRoth? Reply and I will re-run it.\n",
+        "state/task-905.json": {
+          "id": "905",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "0a1b644f2b49195235aa67d61146d23a2c401249c8f32528fc66bebddbe252af",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "mark",
+          "args": {
+            "Id": "905"
+          }
+        }
+      ]
+    }
+  ]
+}

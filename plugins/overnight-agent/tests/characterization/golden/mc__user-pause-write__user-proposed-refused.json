@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/user-pause-write/user-proposed-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "951",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G17",
+            "line": 1,
+            "snippet": "status=proposed",
+            "why": "this task was paused by the user at 2020-01-02T03:04:05-08:00, and writing a turn into it continues work he stopped. A pause is his instruction, not a scheduling state: dispatch already refuses to WAKE a paused task, and this refuses the other half #627 names -- a session that was already alive when the pause landed. He clears it by replying in the journal below the newest turn, or a run records his decision with `oa-state.ps1 mark -StatusBy user`. Use `-DisableGuard G17` only for a turn that is deliberately recording the pause itself"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "951",
+        "length": 150,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

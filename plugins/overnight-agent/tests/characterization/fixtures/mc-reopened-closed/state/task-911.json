@@ -1,0 +1,14 @@
+{
+  "id": "911",
+  "status": "skip",
+  "version": 1,
+  "plan_id": "t911-v1",
+  "processed_file_hash": "d6de6d8eba3163b08c13e31b3e26a0d6069c6e1b918621363e57f176cb25913f",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator"
+}

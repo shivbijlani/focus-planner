@@ -137,6 +137,16 @@ if ($PageSize -lt 1) { Write-Host 'usage: -PageSize must be >= 1'; exit 1 }
 if ($MaxPages -lt 1) { Write-Host 'usage: -MaxPages must be >= 1'; exit 1 }
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$settingsValueScript = Join-Path $here 'settings-value.ps1'
+if (Test-Path -LiteralPath $settingsValueScript) {
+  . $settingsValueScript
+} else {
+  function ConvertFrom-SettingCell([string]$Cell) {
+    $match = [regex]::Match([string]$Cell, '`([^`]*)`')
+    if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    return ([string]$Cell).Trim()
+  }
+}
 
 # ---------------------------------------------------------------- resolution
 # Resolved by SEARCH, never assumed to be a sibling: this file is deployed into the flat OA
@@ -162,6 +172,7 @@ $proberPath = Resolve-First @(
   $ProberScript,
   (Join-Path $here 'mcp-probe.mjs'),
   (Join-Path $here '..\..\checks\mcp-probe.mjs'),
+  (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'mcp-probe.mjs'),
   (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\mcp-probe.mjs')
 )
 
@@ -177,7 +188,9 @@ function Get-UserSettingsPath {
   $candidates = @(
     $env:OVERNIGHT_AGENT_SETTINGS,
     (Join-Path (Get-Location).Path 'user-settings.md'),
+    (Join-IfSet $env:OVERNIGHT_AGENT_PLANNER_DIR 'user-settings.md'),
     (Join-IfSet $env:USERPROFILE 'OneDrive\Apps\Focus Planner\user-settings.md'),
+    (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'user-settings.md'),
     (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\user-settings.md')
   )
   foreach ($c in $candidates) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }
@@ -190,7 +203,7 @@ function Get-SettingRow {
   $re = '(?im)^\s*\|\s*' + [regex]::Escape($Name) + '\s*\|\s*([^|\r\n]*?)\s*\|'
   $m = [regex]::Match($Text, $re)
   if (-not $m.Success) { return $null }
-  return ($m.Groups[1].Value -replace '`', '').Trim()
+  return ConvertFrom-SettingCell $m.Groups[1].Value
 }
 
 function Resolve-DefaultListOnly {

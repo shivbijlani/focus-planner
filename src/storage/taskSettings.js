@@ -122,25 +122,6 @@ export function withTaskSetting(file, taskId, patch) {
   }
 }
 
-export function moveTaskSettingsEntries(sourceFile, targetFile, idMap) {
-  const source = normalizeTaskSettingsFile(sourceFile)
-  const target = normalizeTaskSettingsFile(targetFile)
-  const nextSourceTasks = { ...source.tasks }
-  const nextTargetTasks = { ...target.tasks }
-
-  for (const [oldId, newId] of idMap) {
-    const sourceId = String(oldId)
-    if (!Object.prototype.hasOwnProperty.call(nextSourceTasks, sourceId)) continue
-    nextTargetTasks[String(newId)] = nextSourceTasks[sourceId]
-    delete nextSourceTasks[sourceId]
-  }
-
-  return {
-    source: { ...source, tasks: nextSourceTasks },
-    target: { ...target, tasks: nextTargetTasks },
-  }
-}
-
 let storageAdapter = {
   read: (path) => storage.read(path),
   write: (path, content) => storage.write(path, content),
@@ -174,14 +155,6 @@ function enqueueMutation(sourceKey, mutation) {
   })
 }
 
-export function withTaskSettingsMutationLock(sourceIds, mutation) {
-  const keys = [...new Set(sourceIds.map(String))].sort()
-  const acquire = (index) => index === keys.length
-    ? mutation()
-    : enqueueMutation(`source:${keys[index]}`, () => acquire(index + 1))
-  return acquire(0)
-}
-
 // ── Active-source convenience API (mirrors storage/settings.js) ─────────
 
 export async function readTaskSettings() {
@@ -198,29 +171,6 @@ export async function setTaskSetting(taskId, patch) {
     const file = await readTaskSettings()
     const next = withTaskSetting(file, taskId, patch)
     await writeTaskSettings(next)
-    return next
-  })
-}
-
-// ── Per-source variants ──────────────────────────────────────────────────
-// The Combined view has no single "active" source — each row's task
-// belongs to a specific registered source — so these route reads/writes
-// there directly, the same way storage.readFromSource/writeToSource do for
-// plan content.
-
-export async function readTaskSettingsFromSource(sourceId) {
-  return readWith((path) => storage.readFromSource(sourceId, path))
-}
-
-export async function writeTaskSettingsToSource(sourceId, file) {
-  return writeWith((path, content) => storage.writeToSource(sourceId, path, content), file)
-}
-
-export async function setTaskSettingInSource(sourceId, taskId, patch) {
-  return withTaskSettingsMutationLock([sourceId], async () => {
-    const file = await readTaskSettingsFromSource(sourceId)
-    const next = withTaskSetting(file, taskId, patch)
-    await writeTaskSettingsToSource(sourceId, next)
     return next
   })
 }

@@ -1,0 +1,114 @@
+{
+  "files": {
+    "state/task-934.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "934",
+        "plan_id": "t934-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "chat",
+          "last_woken_at": "<NOW+0m>",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "S-934",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/gated-dispatch/older-gated-turn-untouched",
+  "steps": [
+    {
+      "args": {
+        "CheckDispatch": true,
+        "Id": "934",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": false,
+        "dispatch_eligible": true,
+        "id": "934",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #934. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "S-934",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "DispatchInput": "c33de6cfb3c568c6a2d1e837f01c9457cec7180eb63e3fd23789bd650426687d",
+        "ForDispatch": true,
+        "Id": "934",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": true,
+        "dispatch_eligible": true,
+        "id": "934",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": "<NOW+0m>",
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #934. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "S-934",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

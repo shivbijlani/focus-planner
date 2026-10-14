@@ -1,0 +1,28 @@
+{
+  "files": {},
+  "id": "cmd/get/101",
+  "steps": [
+    {
+      "args": {
+        "Id": "101"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "101",
+        "last_turn_at": "<NOW-60m>",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t101-v1",
+        "processed_file_hash": "882c76a0f237ed2963a74d24dfcfb150923e09759779c3f81177b732a9f64be9",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW-60m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-google-tasks.ps1 -- prove that collect-google-tasks.ps1 can tell a backlog it
   only PARTLY READ from a backlog that is genuinely small, and that each guard doing so is
   load-bearing rather than decorative.
@@ -455,7 +455,7 @@ function Test-Arms {
 
   # N. The same answer, as the user-settings.md row, which is where a durable one belongs.
   $settings = Join-Path $tmp ('settings-' + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.md')
-  [IO.File]::WriteAllText($settings, "# user settings`r`n`r`n| Setting | Value |`r`n| --- | --- |`r`n| Google Tasks lists | ``default only`` |`r`n", (New-Object Text.UTF8Encoding($false)))
+  [IO.File]::WriteAllText($settings, "# user settings`r`n`r`n| Setting | Value |`r`n| --- | --- |`r`n| Google Tasks lists | ``default only`` — bounded collection |`r`n", (New-Object Text.UTF8Encoding($false)))
   $n = Invoke-Subject -ScriptPath $ScriptPath -Scenario 'no-lists-tool' -PageSize 100 -AsJson -SettingsPath $settings
   $res['N'] = ($n.Json -and $n.Json.verdict -eq 'complete' -and [int]$n.Json.open -eq 70 -and $n.ExitCode -eq 0)
 

@@ -1,0 +1,340 @@
+{
+  "files": {
+    "state/task-101.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "101",
+        "plan_id": "",
+        "processed_file_hash": "882c76a0f237ed2963a74d24dfcfb150923e09759779c3f81177b732a9f64be9",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-102.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "102",
+        "plan_id": "",
+        "processed_file_hash": "6ad197e7bc9c4dc19c177a93babb598ea9fd36bf1737c0ead446400e98ba6142",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-103.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "103",
+        "plan_id": "",
+        "processed_file_hash": "5e96f301647a0b22931fb8752af8042057972564abbb95b5ba1b57bb836e0486",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-104.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "104",
+        "plan_id": "",
+        "processed_file_hash": "98e0074ffc77fc16b407c7c6637e43232752b616e7c206195740588e26374e6d",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-105.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "105",
+        "plan_id": "",
+        "processed_file_hash": "1e30e660ad30faed2ed7a770cdfc3efe16ed032b7995913a5f153fd5703640be",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-106.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "106",
+        "plan_id": "",
+        "processed_file_hash": "00e750425b63f5fcd853a80ed80dc77bc1d08342b014bfb81c2442eda6eae700",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-107.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "107",
+        "plan_id": "",
+        "processed_file_hash": "0174a41b8a047d9f4cee67d93ece9a8afd31ccaa30a73f84119b944e2c6ed9a9",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-108.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "108",
+        "plan_id": "",
+        "processed_file_hash": "7a7f2c30565d9a65cbffe337bd9af439c9bf4c09c4173e914b75ce6b891aab6c",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-109.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "109",
+        "plan_id": "",
+        "processed_file_hash": "0367384428ccdcaa783f96a2fcf6c7562e46fe84b2d2431e36d5bc2a4d9f4f5f",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-110.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "110",
+        "plan_id": "",
+        "processed_file_hash": "1ad811d180ce86b6a4edd69033fe9b38d898ee337ca1e53be8e73cb7e62032c3",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-111.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "111",
+        "plan_id": "",
+        "processed_file_hash": "c892711eb9edd59677c7c532a748788858366fea3210c8f28cc36f56d24b8bf0",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-112.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "112",
+        "plan_id": "",
+        "processed_file_hash": "ae3197ae9858d3b9621084698bd91414f6d649cc5207dc79cdcffaf169cedf34",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-113.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "has_agent_block": false,
+        "id": "113",
+        "plan_id": "",
+        "processed_file_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "seeded": true,
+        "status": "none",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-114.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "114",
+        "plan_id": "",
+        "processed_file_hash": "dfaa05c534d9d98cc1dc198f6e761645650ab3589e62500991462ec23c660db9",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-115.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "115",
+        "plan_id": "",
+        "processed_file_hash": "da093799fad6a711b9983dc976f63458cc013180dc372b35b29752baafbca74b",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-116.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "116",
+        "plan_id": "",
+        "processed_file_hash": "e882dbccbc26660abcd85b89c66b219d7264f64d585942f94ded031b6e254368",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-117.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "117",
+        "plan_id": "",
+        "processed_file_hash": "97a59078b2a07979f35cbf37572f340d4010a5199654eb249cc5a428b85cf195",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-118.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "118",
+        "plan_id": "",
+        "processed_file_hash": "04241ebd392b2ae1d09ee59009974a7ba806e96de20698d23d12747d6070e46c",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-119.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "119",
+        "plan_id": "",
+        "processed_file_hash": "d9015e5d107a68a4ee5e7863bbee12000fb4a22cd33e662e9ab482248d93159b",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-121.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "121",
+        "plan_id": "",
+        "processed_file_hash": "ec93ed6b248f1ea4b8bc59180eaf9c7badafe464d3a6548a2ca7647c4bb8c25e",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-122.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "122",
+        "plan_id": "",
+        "processed_file_hash": "8a41ad832aa95798df528a754053feef962b8a558a1eb04cfe0b95831070931b",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    },
+    "state/task-123.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "has_agent_block": true,
+        "id": "123",
+        "plan_id": "t123-v3",
+        "processed_file_hash": "481f55980e963d68bb34f9c53887dc5ead12473b5390d311281809996aa04625",
+        "seeded": true,
+        "status": "in-progress",
+        "updated": "<NOW+0m>",
+        "version": 3
+      }
+    },
+    "state/task-124.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "124",
+        "plan_id": "",
+        "processed_file_hash": "8193365ef03745ce4d26a8bb84133025f226f8c13275ef54dcd3bfd49aefcb08",
+        "seeded": true,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    }
+  },
+  "id": "cmd/seed/base-force",
+  "steps": [
+    {
+      "args": {
+        "Force": true
+      },
+      "command": "seed",
+      "exit": 0,
+      "stdout": [
+        "seeded 23 task state file(s) into <ROOT>/lad/overnight-agent/state"
+      ],
+      "tool": "oa-state"
+    }
+  ]
+}

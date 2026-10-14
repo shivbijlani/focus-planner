@@ -1,0 +1,57 @@
+{
+  "files": {},
+  "id": "mc/per-task-session/code-bind-refusals",
+  "steps": [
+    {
+      "args": {
+        "Id": "904",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-904",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_project_required: a code task must name the repository project its session belongs to (-SessionProject). Omitting it inherits the RUN session's project, which is how a \"per-task session\" ends up sharing the run session workspace with no git repo in it."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "904",
+        "RunWorkspace": "<ROOT>/cwd",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/cwd",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_workspace_inherited: workspace '<ROOT>/cwd' is the RUN session's own workspace. One task, one workspace -- sharing one deadlocks the sessions and reproduces the very isolation failure #404 exists to prevent."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "904",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-904",
+        "WorkspaceType": "folder"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_workspace_type: a code task cannot use a 'folder' workspace; use worktree (preferred) or branch."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -103,9 +103,14 @@ Copy-Item (Join-Path $JournalDir '*.md') $backup
 Write-Output "[backfill] backup -> $backup ($((Get-ChildItem $backup -Filter '*.md').Count) files)"
 
 $ok = 0; $failed = @()
+# The engine the agent runs (#124): oa-state.mjs beside the .ps1, under node. The .ps1 only when
+# the port is absent or node is not installed. The two now share one state lock either way.
+$oaMjs = Join-Path (Split-Path -Parent $OaState) 'oa-state.mjs'
+$useNode = (Test-Path -LiteralPath $oaMjs) -and [bool](Get-Command node -ErrorAction SilentlyContinue)
 foreach ($id in $blind) {
   try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $OaState mark -Id $id *> $null
+    if ($useNode) { & node $oaMjs mark -Id $id *> $null }
+    else { & powershell -NoProfile -ExecutionPolicy Bypass -File $OaState mark -Id $id *> $null }
     if ($LASTEXITCODE -ne 0) { throw "oa-state mark exited $LASTEXITCODE" }
     $ok++
   } catch {

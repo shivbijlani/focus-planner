@@ -18,9 +18,13 @@ exhaustion, consent, and self-healing, see [Prioritisation](Prioritisation) and
 `plugins/overnight-agent/skills/overnight-agent/SKILL.md` defines an unattended planner loop. It
 reads external settings, checks inbox/doc-comment surfaces, scans planner state, dispatches
 approved work into per-task sessions, proposes new plans for eligible work, generates task papers,
-and mirrors results to Telegram. `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
-implements the machine-readable state layer behind that loop: board ordering, reopen detection,
+and mirrors results to Telegram. `plugins/overnight-agent/skills/overnight-agent/oa-state.mjs`
+(the Node port of `oa-state.ps1`, which stays as the fallback) implements the machine-readable state layer behind that loop: board ordering, reopen detection,
 doc bindings, session bindings, consent, gates, timers, and journal snapshots.
+The coordinator fills up to `Overnight Agent concurrency` active sends, polls tracked sessions
+with the native `get_sessions_status` tool about once per minute, and re-scans to refill idle
+openings until the next half-hour start cutoff minus the configured buffer. Running tasks continue
+after cutoff; the coordinator does not require a drain extension.
 
 The check suite exists because the agent runs while nobody watches it. The doc comments in
 `plugins/overnight-agent/checks/mutcheck-doc-comments.mjs`,
@@ -119,7 +123,10 @@ These files are runtime-critical even though the fact collector does not index t
 | Path | Role |
 | --- | --- |
 | `plugins/overnight-agent/skills/overnight-agent/SKILL.md` | Main operating contract. The phase headings in the file are literal: `PHASE 0`, `PHASE 0.7`, `PHASE 1`, `PHASE 1.5`, `PHASE 2`, `PHASE 2.5`, `PHASE 3`. |
-| `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` | Core state-machine CLI and journal/board/session reader. |
+| `plugins/overnight-agent/skills/overnight-agent/oa-state.mjs` | Core state-machine CLI and journal/board/session reader, the one the agent runs (`node <skill>\oa-state.mjs <command>`). Laid out as `oa-state-lib/` collect / plan / act / report. |
+| `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` | The same CLI in PowerShell, kept with identical behaviour (characterization goldens, differential tests, every mutation check on both) as the fallback for a host without Node, for a whole run at a time. Both take the same state lock file, so a PowerShell writer and a Node writer queue rather than lose an update (`mutcheck-engine-lock.ps1`). |
+| `plugins/overnight-agent/skills/overnight-agent/write-turn.mjs` | The sanctioned planner write tool: the only way the agent writes a journal turn, plus the sent-messages ledger. |
+| `plugins/overnight-agent/skills/overnight-agent/write-turn.ps1` | The same tool in PowerShell, kept with identical behaviour as the fallback for a host without Node. |
 | `plugins/overnight-agent/skills/overnight-agent/user-settings.md` | Shareable template for the external settings file; the skill warns that updates overwrite the bundled template. |
 | `plugins/overnight-agent/skills/catchup-doc/SKILL.md` | The companion write-up skill the overnight agent points at when a task uses a catch-up document. |
 | `plugins/overnight-agent/skills/catchup-doc/resolve-ids.ps1` | ID-to-title link resolver used by the catch-up-doc workflow. |
@@ -127,7 +134,7 @@ These files are runtime-critical even though the fact collector does not index t
 </details>
 
 `SKILL.md` is operational, not aspirational. It tells the agent to resolve an **external**
-`user-settings.md`, to run `oa-state.ps1 scan` before judging tasks, and to keep task work in a
+`user-settings.md`, to run `oa-state.mjs scan` before judging tasks, and to keep task work in a
 per-task session rather than in the run session. `plugins/overnight-agent/skills/catchup-doc/SKILL.md`
 adds the reporting side: one zero-context paper, titled links for IDs, and document updates in
 place rather than comment-thread back-and-forth. It names the one tool that can actually rewrite a
@@ -145,7 +152,7 @@ replaced a version of PHASE 0.7 that told the reader to skip unbound tasks and t
 instructed it to create the doc for them — the contradiction behind issue #548, closed by moving
 ownership out of the phase entirely.
 
-`oa-state.ps1` is large, but its command surface is explicit near the top:
+`oa-state.ps1` (and its port `oa-state.mjs`, with the same commands) is large, but its command surface is explicit near the top:
 
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
@@ -161,7 +168,7 @@ consent -Id <id> [-Action <kind>] [-Repo <name>]
 gate
 extract -Id <id> [-BudgetKB <n>] [-Json] [-Verify]
 mark   -Id <id> [-Status s] [-Version n] [-PlanId p] [-Poll <cadence>] [-Recheck <cadence>]
-session [-Id <id>] [-InFlight] [-SessionId <sid>] [-SessionDead] [-SessionWoken] [-SessionRelease]
+session [-Id <id>] [-SessionId <sid>] [-SessionDead] [-SessionRelease]
 doc    -Id <id> ...
 resnapshot
 ```
@@ -175,10 +182,63 @@ Its function map matches those commands. `Get-UserSettingsPath`, `Resolve-GateSe
 and eligibility; `Cmd-Doc`, `Cmd-Session`, `Cmd-Extract`, and `Cmd-Mark` handle durable state.
 
 `user-settings.md` is equally concrete. Its `## Overnight Agent behaviour` table exposes `Today gate
-backstop`, `Today gate strict`, and `Overnight Agent concurrency`; its settings table also names
+backstop`, `Today gate strict`, `Overnight Agent concurrency`, and the coordinator start buffer; its settings table also names
 `Planner board`, `Completed board`, `Journals folder`, `Agent state store`, `Dev drive (repos)`,
-`Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
+`Non-code task project`, `Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
 live outside the plugin and that the bundled copy is overwritten on update.
+
+### The sanctioned write tool
+
+The agent changes planner files through one Node command-line script it runs and that then exits:
+`write-turn.mjs`. It appends a journal turn only after a set of guards (G1–G23) accept it: the text
+survived the trip to disk, the turn is anchorable and carries its own provenance marker, it declares
+its ask (`-Ask blocking|offer|none`), and — for a task with a catch-up document — it is a short pointer
+that still holds the ask. It also refuses a task that is snoozed today-or-later. It never rewrites
+or deletes existing content, backs the journal up first and keeps the file's own line endings. Exit codes: `0` written or clean, `2` refused (nothing
+written), `3` an `OA_SANDBOX_ROOT` violation or bad ledger arguments, `1` other bad arguments.
+
+Three duties make it the sanctioned writer rather than one writer among several:
+
+- **Identity.** Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` directly under
+  its `<!-- from: overnight-agent -->` marker and `oa-ask` stamp. The marker itself is unchanged, so
+  every reader still attributes the turn to the agent; the stamp only adds which session and which
+  machine. A body that carries its own stamp is refused (G21).
+- **Files no agent writes.** The only target is `journal/task-<id>.md` inside `-JournalDir`. An `-Id`
+  carrying a path, a target outside the folder, or a journal that is a link to `agent-gate.md` or
+  `user-settings.md` is refused (G20). A snoozed task is refused until the snooze date has passed
+  (G22). A task the user closed (oa-state's `Test-UserClosed`: `done`/`skip` and on
+  planner-completed.md, or `status_by: user`, or on neither board) is refused even when he has
+  replied below it (G24); such a reply is `reopened_closed`, reported and never worked. G24 fails
+  closed when the state or board that decides it cannot be read.
+- **Approved work stays in the task session.** If the fail-closed consent reader says the journal
+  currently has Shiv's pending approval, G23 refuses an outcome turn from any caller other than the
+  task's bound `session.session_id` or recorded prior session. Unknown callers fail closed. The
+  matching `oa-state mark` guard refuses coordinator status changes that mean the approved work is
+  being done or finished (`in-progress`, `done`, `blocked`), while leaving dispatch bookkeeping,
+  `-Status approved`, `-StatusBy user`, timers, rechecks, and status-less turn-end stamping legal.
+  Stored user-pause states (`status_by: user` with `blocked`/`proposed`) are excluded so a human
+  "go ahead" that resumes a pause is not mistaken for approval of gated work.
+  G20, G21, G22, G23 and G24 cannot be disabled with `-DisableGuard`.
+- **Sent-messages ledger.** `write-turn.mjs record-sent` records each message the agent sends
+  outside the planner (mail, Teams, Google Doc comments, Telegram); `write-turn.mjs was-sent` answers
+  whether a message id is the agent's own. Teams, mail and Google Doc replies are posted as the user,
+  so the consent reader can only accept one there when it has no agent signature and its id is not in
+  this ledger (Data formats § 3). The consent reader consults it: a Google Doc comment whose id is in
+  the ledger is the agent's, and a ledger that exists but cannot be read in full refuses. Which
+  channels may approve at all is set by the `## Approvals` section of `agent-gate.md`.
+
+Its contract is the characterization goldens recorded from `write-turn.ps1`
+(`plugins/overnight-agent/tests/characterization`), which both implementations pass, plus
+differential tests that run the two side by side (`plugins/overnight-agent/tests/write-turn-port`).
+
+### Per-task session isolation
+
+Every non-code task uses a dedicated session in one registered local folder project rooted at
+`%LOCALAPPDATA%\overnight-agent\task-chats`. The project ID is stored as `Non-code task project`
+in the external settings file. The coordinator names that project on `create_session` and binds
+the ID with kind `chat`, its project ID and the folder workspace. The binder rejects paths under
+OneDrive or inside a code worktree, and rejects a different project or folder. Code tasks
+continue to use their repository worktrees under `V:\repos`.
 
 The PowerShell-side mutchecks parallel the JS ones. Files such as
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`,

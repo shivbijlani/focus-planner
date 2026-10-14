@@ -1,0 +1,17 @@
+{
+  "files": {},
+  "id": "mc/advertised-reply-word/bold-emphasis-allowed",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

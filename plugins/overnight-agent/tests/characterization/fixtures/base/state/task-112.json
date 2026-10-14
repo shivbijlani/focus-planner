@@ -1,0 +1,24 @@
+{
+  "id": "112",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t112-v1",
+  "processed_file_hash": "ae3197ae9858d3b9621084698bd91414f6d649cc5207dc79cdcffaf169cedf34",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator",
+  "doc": {
+    "doc_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEF",
+    "doc_url": "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEF/edit",
+    "bound_at": "2020-03-01T12:00:00Z",
+    "seen_ids": [
+      "AAAAc1"
+    ],
+    "pending_ids": [],
+    "observed_at": "{{NOW-30m}}"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/consent-authorship/sibling-does-not-spend",
+  "steps": [
+    {
+      "args": {
+        "Id": "905"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": "me",
+        "affirmative_phrase": "approve",
+        "affirmative_unattributed": false,
+        "consent_ok": true,
+        "human_segments": 1,
+        "id": "905",
+        "path": "<ROOT>/data/journal/task-905.md",
+        "reason": "human-authored-affirmative",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

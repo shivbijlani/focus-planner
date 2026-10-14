@@ -339,7 +339,7 @@ for (const f of findings) {
   console.log(`     observed:  ${f.observed_at}`);
   console.log(`     last turn: ${f.last_turn_at}${f.pending ? `   pending comments: ${f.pending}` : ''}`);
   if (f.kind === 'NEVER_READ') {
-    console.log('     -> no run has ever called `oa-state.ps1 doc -Observe` for this task, so a');
+    console.log('     -> no run has ever called `oa-state.mjs doc -Observe` for this task, so a');
     console.log('        comment on the doc reaches nothing and `scan` reports 0 either way.');
   }
   if (f.kind === 'SPOKE_WITHOUT_READING') {

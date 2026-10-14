@@ -13,12 +13,13 @@
  *    `connect2026.1/`, `2026-cycle-3/`, `dist/`, `outputs/`, or
  *    `_backup_renumber_…/` is hidden even if it holds its own copy of a core
  *    file — the sidebar only surfaces the source's own top-level plan files.
+ *    This includes `docs/` (catch-up documents), which the Docs app owns.
  *  - Any loose `.md` not in the allow-list (e.g. focus-plan.md,
  *    6-week-cycle-plan.md, agent-email-setup.md).
  *
  * The tree shape is the provider shape: { name, type: 'file'|'directory',
- * path, children? }. This operates on the UNPREFIXED tree (basenames), so it is
- * applied before any multi-source `sourceId::` path prefixing.
+ * path, children? }. This operates on the active provider's unprefixed tree
+ * (basenames).
  */
 import { PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { AGENTS_FILE } from './config/agentsDoc.js'
@@ -54,4 +55,29 @@ export function filterPlannerTree(items) {
     }
   }
   return out
+}
+
+export const DOCS_DIR = 'docs'
+
+/**
+ * Remove the top-level `docs/` folder (catch-up documents, owned by the Docs app —
+ * plans/docs-app-design.md §3.2) from a provider file tree. Deliberately narrow: it is
+ * the only filter the sidebar applies, so every other file keeps showing exactly as
+ * before. Apply to the active provider's tree.
+ */
+export function hideDocsFolder(items) {
+  if (!Array.isArray(items)) return items
+  return items.filter((item) => !(item?.type === 'directory' && item.name === DOCS_DIR && (item.path || item.name) === DOCS_DIR))
+}
+
+export const AGENT_METADATA_DIR = 'agent-metadata'
+
+/**
+ * Remove the top-level `agent-metadata/` folder (per-device files the Overnight Agent publishes
+ * for the 🤖 session link, docs/spec/Domain-agent-metadata.md). Machine files, never edited by
+ * hand, so the sidebar must look exactly as it did before an agent published one.
+ */
+export function hideAgentMetadataFolder(items) {
+  if (!Array.isArray(items)) return items
+  return items.filter((item) => !(item?.type === 'directory' && item.name === AGENT_METADATA_DIR && (item.path || item.name) === AGENT_METADATA_DIR))
 }

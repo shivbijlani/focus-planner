@@ -13,7 +13,30 @@
  * once every device has loaded at least once and healed itself. The single
  * call site in App.jsx is marked with `SELF_HEAL_IDS`.
  */
-import { parseLocalId, rewriteRowId } from './moveTask.js'
+export function parseLocalId(idCell) {
+  const value = String(idCell).trim()
+  const comma = value.indexOf(',[')
+  const local = comma !== -1 ? value.slice(0, comma) : value
+  return local.trim().match(/^(\d+)/)?.[1] || null
+}
+
+function rewriteRowId(rawLine, newId, idMap = new Map()) {
+  const parts = rawLine.split('|')
+  if (parts.length < 3) return rawLine
+  const idCell = parts[1].trim()
+  const comma = idCell.indexOf(',[')
+  const suffix = comma !== -1 ? idCell.slice(comma) : ''
+  parts[1] = ` ${newId}${suffix} `
+  const linkedIndex = parts.length - 2
+  if (linkedIndex >= 2) {
+    const linked = parts[linkedIndex].trim()
+    const linkedId = linked.match(/^(\d+)/)?.[1]
+    if (linkedId && idMap.has(linkedId)) {
+      parts[linkedIndex] = ` ${idMap.get(linkedId)}${linked.slice(linkedId.length)} `
+    }
+  }
+  return parts.join('|')
+}
 
 /**
  * Given the list of task-row IDs (numbers), return the set of IDs considered

@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "mc/declared-ask-write/bad-value-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "maybe",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "maybe",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G13",
+            "line": 1,
+            "snippet": "-Ask maybe",
+            "why": "unknown -Ask value 'maybe'. It must be exactly one of: blocking, offer, none. A value this script does not recognise would be stamped into the journal and then ignored by oa-state.ps1, which falls back to the prose -- silently reinstating the defect the flag removes"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 150,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

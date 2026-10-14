@@ -1,0 +1,212 @@
+{
+  "fixture": "mc-workspace-verdict",
+  "covers": [
+    "mutcheck-workspace-verdict"
+  ],
+  "cases": [
+    {
+      "id": "mc/workspace-verdict/empty-worktree-replace",
+      "note": "existing worktree directory without .git is missing and verdict replace, not create",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 970 | task 970 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-970.md": "# Task 970: task 970\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-970.json": {
+          "id": "970",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t970-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-970",
+            "kind": "code",
+            "project": "p",
+            "workspace": "{{ROOT_JSON}}\\lad\\overnight-agent\\worktrees\\gone",
+            "workspace_type": "worktree",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/worktrees/gone/.gitkeep": ""
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "970"
+      }
+    },
+    {
+      "id": "mc/workspace-verdict/healthy-worktree-reuse",
+      "note": "worktree with .git file is reusable and workspace_missing false",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 971 | task 971 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-971.md": "# Task 971: task 971\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-971.json": {
+          "id": "971",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t971-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-971",
+            "kind": "code",
+            "project": "p",
+            "workspace": "{{ROOT_JSON}}\\lad\\overnight-agent\\worktrees\\ok",
+            "workspace_type": "worktree",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/worktrees/ok/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "971"
+      }
+    },
+    {
+      "id": "mc/workspace-verdict/folder-not-judged",
+      "note": "folder workspace without .git is not judged as missing",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 972 | task 972 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-972.md": "# Task 972: task 972\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-972.json": {
+          "id": "972",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t972-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-972",
+            "kind": "code",
+            "project": "p",
+            "workspace": "{{ROOT_JSON}}\\lad\\overnight-agent\\folder-ws",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/folder-ws/.gitkeep": ""
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "972"
+      }
+    },
+    {
+      "id": "mc/workspace-verdict/deleted-worktree-replace",
+      "note": "nonexistent worktree under reachable root is a torn-down workspace and reports missing",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 973 | task 973 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-973.md": "# Task 973: task 973\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-973.json": {
+          "id": "973",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t973-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-973",
+            "kind": "code",
+            "project": "p",
+            "workspace": "{{ROOT_JSON}}\\lad\\overnight-agent\\worktrees\\deleted",
+            "workspace_type": "worktree",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/worktrees/.gitkeep": ""
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "973"
+      }
+    },
+    {
+      "id": "mc/workspace-verdict/uninspectable-reuse",
+      "note": "unreachable root is not treated as dead evidence",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 974 | task 974 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-974.md": "# Task 974: task 974\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-974.json": {
+          "id": "974",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t974-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "S-974",
+            "kind": "code",
+            "project": "p",
+            "workspace": "Z:\\no-such-mount\\never-created",
+            "workspace_type": "worktree",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "974"
+      }
+    }
+  ]
+}

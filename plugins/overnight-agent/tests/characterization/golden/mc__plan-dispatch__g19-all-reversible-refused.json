@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "mc/plan-dispatch/g19-all-reversible-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "blocking",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G19",
+            "line": 3,
+            "snippet": "**Status:** Proposed",
+            "why": "proposed parks the task: its first numbered step must be [gated] and -Ask blocking. For reversible or gate-allowed first steps, dispatch them this wake and write the outcome as in-progress/done (or blocked only when gated work remains)"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 168,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

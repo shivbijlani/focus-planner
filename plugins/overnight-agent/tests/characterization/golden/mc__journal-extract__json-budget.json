@@ -1,0 +1,71 @@
+{
+  "files": {},
+  "id": "mc/journal-extract/json-budget",
+  "steps": [
+    {
+      "args": {
+        "BudgetKB": 8,
+        "Id": "999",
+        "Json": true
+      },
+      "command": "extract",
+      "exit": 0,
+      "json": {
+        "board_note": "",
+        "board_path": "<ROOT>/data/planner.md",
+        "board_read": true,
+        "board_row_found": true,
+        "ceiling_bytes": 8192,
+        "deliverables": [],
+        "elided_bytes": 51591,
+        "emitted_bytes": 2953,
+        "has_agent_block": true,
+        "head": {
+          "elided_bytes": 22251,
+          "text": "# Task 999: fixture\n<!-- tg-meta chatId=-100123 threadId=7 -->\n\nHEAD-SENTINEL the user framing at the very top.\n**Linked:** #123\n\nHEAD-TAIL-SENTINEL the last line before agent history.\n\n## 2020-01-01\n<!-- from: me -->\nOLD-USER-SENTINEL the first decision.\n\n",
+          "truncated": true
+        },
+        "id": "999",
+        "latest_turn": {
+          "elided_bytes": 15582,
+          "text": "## Overnight Agent -- newest\n<!-- from: overnight-agent -->\n**Status:** In-progress\nTURN-SENTINEL the newest agent turn.\nnewest turn paragraph 8. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. filler prose that exists only to blow the byte budget. \n**Needs from you:** ASK-SENTINEL please confirm.\nTURN-TAIL-SENTINEL the last line of the newest turn.\n<!-- /overnight-agent turn-end -->\n",
+          "truncated": true
+        },
+        "linked": [
+          "123"
+        ],
+        "linked_board": [],
+        "linked_journal": [
+          "123"
+        ],
+        "open_asks": [
+          {
+            "blocking": true,
+            "kind": "Needs from you",
+            "text": "ASK-SENTINEL please confirm."
+          }
+        ],
+        "path": "<ROOT>/data/journal/task-999.md",
+        "source_bytes": 54544,
+        "status": "In-progress",
+        "trailing_user": {
+          "elided_bytes": 0,
+          "text": "\n## 2020-06-07\n<!-- from: me -->\nTRAIL-SENTINEL the unanswered reply.\n\n",
+          "truncated": false
+        },
+        "user_messages": {
+          "dropped": 0,
+          "elided_bytes": 0,
+          "newest_first": [
+            "\nTRAIL-SENTINEL the unanswered reply.\n\n",
+            "\nNEW-USER-SENTINEL the decision that supersedes the old one.\n\n",
+            "\nOLD-USER-SENTINEL the first decision.\n\n"
+          ],
+          "shown": 3,
+          "total": 3
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

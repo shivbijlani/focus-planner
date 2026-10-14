@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "cmd/consent/109-merge-pr-prefix-repo",
+  "steps": [
+    {
+      "args": {
+        "Action": "merge_pr",
+        "Id": "109",
+        "Repo": "sample"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "merge_pr",
+        "affirmative_answered": false,
+        "affirmative_author": "me",
+        "affirmative_phrase": "merge 12",
+        "affirmative_unattributed": false,
+        "consent_ok": true,
+        "gate_list": null,
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": null,
+        "gate_state": "ok",
+        "human_segments": 1,
+        "id": "109",
+        "path": "<ROOT>/data/journal/task-109.md",
+        "reason": "human-authored-affirmative",
+        "repo": "sample",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

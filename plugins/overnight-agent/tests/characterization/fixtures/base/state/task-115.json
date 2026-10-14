@@ -1,0 +1,14 @@
+{
+  "id": "115",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t115-v1",
+  "processed_file_hash": "da093799fad6a711b9983dc976f63458cc013180dc372b35b29752baafbca74b",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-05T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-05T12:00:00Z",
+  "last_turn_by": "sess-coordinator"
+}

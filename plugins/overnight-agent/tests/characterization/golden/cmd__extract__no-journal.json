@@ -1,0 +1,18 @@
+{
+  "files": {},
+  "id": "cmd/extract/no-journal",
+  "steps": [
+    {
+      "args": {
+        "Id": "999"
+      },
+      "command": "extract",
+      "exit": 1,
+      "stderr": [
+        "extract: no journal at <ROOT>/data/journal/task-999.md"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

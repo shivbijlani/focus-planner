@@ -66,6 +66,7 @@ const SKILL_REPO = process.env.OA_SKILL_REPO || firstExisting([
 
 const SKILL_OWNED = new Set([
   'write-turn.ps1',
+  'write-turn.mjs',
   'mutcheck-write-turn.ps1',
   'reap-stale-mcp.ps1',
   'oa-state.ps1',
@@ -83,6 +84,7 @@ const ORCHESTRATION = [
   // is the failure mode #180 was about, one level down.
   'browser-slot-table.ps1',
   'write-turn.ps1',
+  'write-turn.mjs',
   'artifact-index.mjs',
   'sync-checks.ps1',
   'deploy-installed-plugin.ps1',

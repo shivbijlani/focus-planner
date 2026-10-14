@@ -304,5 +304,7 @@ for (const f of files) {
   console.log(`    ${f}`);
 }
 console.log('');
-console.log(`  Fix: bump "version" in ${PLUGIN_JSON} (currently ${headVersion ?? '?'}) and commit it.`);
+console.log(`  Fix: bump "version" in ${PLUGIN_JSON} (currently ${headVersion ?? '?'}), set the`);
+console.log('  overnight-agent entry\'s "version" in .github/plugin/marketplace.json to the same');
+console.log('  value (marketplace-version-sync.mjs gates that), and commit both.');
 process.exit(1);

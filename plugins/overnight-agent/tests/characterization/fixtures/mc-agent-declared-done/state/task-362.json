@@ -1,0 +1,14 @@
+{
+  "id": "362",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t362-v1",
+  "processed_file_hash": "0ab5dee5d19872d91b47fdc2ded84bfdca2b120918975694d16f62cccea6f211",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator"
+}

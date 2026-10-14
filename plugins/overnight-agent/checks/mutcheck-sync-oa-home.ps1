@@ -33,6 +33,10 @@ function Assert { param([bool]$c, [string]$n, [string]$m = '') if ($c) { Ok $n $
 
 $Script = Join-Path $PSScriptRoot 'sync-oa-home.ps1'
 if (-not (Test-Path $Script)) { throw "subject not found: $Script" }
+$installer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'install-oa-reliability-tray.ps1') -Raw
+if ($installer -notmatch '\$script:DeployedFiles\s*=\s*Get-Content[^\r\n]*reliability-tray-files\.json') {
+  throw 'installer must read the same reliability-tray-files.json roster as sync-oa-home'
+}
 
 $root = Join-Path $env:TEMP ("mutcheck-sync-oa-home-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -63,6 +67,9 @@ function New-Fixture {
     & git commit --quiet -m 'v1' 2>&1 | Out-Null
 
     Set-Content -LiteralPath (Join-Path $repo $probe) -Value "# probe v2`nWrite-Output 'v2'" -NoNewline -Encoding utf8
+    [IO.File]::WriteAllText(
+      (Join-Path $repo 'plugins\overnight-agent\checks\reliability-tray-files.json'),
+      '["probe.ps1"]', (New-Object Text.UTF8Encoding($false)))
     & git add -A 2>&1 | Out-Null
     & git commit --quiet -m 'v2' 2>&1 | Out-Null
 
@@ -113,6 +120,23 @@ function Add-Roster {
   try {
     & git add -A 2>&1 | Out-Null
     & git commit --quiet -m 'roster' 2>&1 | Out-Null
+    & git branch -f main HEAD 2>&1 | Out-Null
+  } finally { Pop-Location }
+}
+
+function Add-TrayFiles {
+  param([string]$Repo)
+  $chk = Join-Path $Repo 'plugins\overnight-agent\checks'
+  Push-Location $Repo
+  try {
+    Set-Content -LiteralPath (Join-Path $chk 'tray-fixture.ps1') -Value '# tray v1' -NoNewline -Encoding utf8
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'tray v1' 2>&1 | Out-Null
+    Set-Content -LiteralPath (Join-Path $chk 'tray-fixture.ps1') -Value '# tray v2' -NoNewline -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $chk 'tray-new.ps1') -Value '# newly rostered' -NoNewline -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $chk 'reliability-tray-files.json') -Value '["probe.ps1","tray-fixture.ps1","tray-new.ps1"]' -NoNewline -Encoding utf8
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'tray v2 and roster' 2>&1 | Out-Null
     & git branch -f main HEAD 2>&1 | Out-Null
   } finally { Pop-Location }
 }
@@ -218,18 +242,25 @@ console.log(rows.length)
 }
 
 function Invoke-Subject {
-  param([string]$ScriptPath, $Fx, [switch]$WhatIf, [string[]]$ExtraArgs = @())
+  param([string]$ScriptPath, $Fx, [switch]$WhatIf, [string[]]$ExtraArgs = @(), [string]$OaHome)
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
-            '-Ref', 'main', '-Repo', $Fx.Repo, '-OaHome', $Fx.Home,
+            '-Ref', 'main', '-Repo', $Fx.Repo, '-OaHome', $(if ($OaHome) { $OaHome } else { $Fx.Home }),
             '-StatePath', (Join-Path $Fx.Base 'state.json'), '-SkipFetch', '-SkipBackup', '-Json')
   if ($WhatIf) { $args += '-WhatIf' }
   if ($ExtraArgs) { $args += $ExtraArgs }
-  $out = & powershell @args 2>&1 | Out-String
+  # Mutants intentionally fail inside the child; capture stderr as evidence rather
+  # than letting Windows PowerShell 5.1 promote native stderr to a terminating error.
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $out = & powershell @args 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+  } finally { $ErrorActionPreference = $previousPreference }
   $json = $null
   # -Json prints the object after the human lines; take the last JSON object.
   $idx = $out.IndexOf('{')
   if ($idx -ge 0) { try { $json = $out.Substring($idx) | ConvertFrom-Json } catch { } }
-  return [pscustomobject]@{ Raw = $out; Json = $json; Exit = $LASTEXITCODE }
+  return [pscustomobject]@{ Raw = $out; Json = $json; Exit = $exitCode }
 }
 
 function Get-Class {
@@ -324,6 +355,34 @@ Assert ((Get-Class $rF 'diagnostic-tool.mjs') -eq '<absent>') 'T_NO_OVERDEPLOY_Q
 
 # ENTRY: run-sweeps.ps1 is named directly, so it deploys even though nothing imports it.
 Assert ((Get-Class $rF 'run-sweeps.ps1') -eq 'MISSING') 'T_ENTRY' 'a named entry point is required even when unreferenced'
+
+# --- T_TRAY: installer roster drives forward sync, and writes require a restart ----
+$fxTray = New-Fixture 'tray'
+Add-TrayFiles $fxTray.Repo
+Set-Content -LiteralPath (Join-Path $fxTray.Home 'tray-fixture.ps1') -Value '# tray v1' -NoNewline -Encoding utf8
+$trayDryRun = Invoke-Subject $Script $fxTray -WhatIf
+Assert ((Get-Class $trayDryRun 'tray-new.ps1') -eq 'MISSING') 'T_TRAY_WHATIF_DRIFT' 'a new tray file is visible before deployment'
+Assert ($trayDryRun.Json.verifiedCurrent -eq $false -and -not $trayDryRun.Json.trayRestartNeeded) 'T_TRAY_WHATIF_NO_RESTART' 'dry run does not claim to have changed the running tray'
+$trayRun = Invoke-Subject $Script $fxTray
+Assert ((Get-Class $trayRun 'tray-fixture.ps1') -eq 'BEHIND') 'T_TRAY_BEHIND' 'historical tray bytes are classified against the ref'
+Assert ((Get-Content -LiteralPath (Join-Path $fxTray.Home 'tray-fixture.ps1') -Raw) -eq '# tray v2') 'T_TRAY_UPDATED' 'the old tray file is deployed'
+Assert ((Get-Class $trayRun 'tray-new.ps1') -eq 'MISSING' -and (Test-Path (Join-Path $fxTray.Home 'tray-new.ps1'))) 'T_TRAY_MISSING' 'the newly rostered tray file is deployed'
+Assert ($trayRun.Json.verifiedCurrent -and $trayRun.Json.trayRestartNeeded) 'T_TRAY_RESTART' 'the successful write reports restart needed in JSON'
+$fxTrayText = New-Fixture 'tray-text'
+Add-TrayFiles $fxTrayText.Repo
+Set-Content -LiteralPath (Join-Path $fxTrayText.Home 'tray-fixture.ps1') -Value '# tray v1' -NoNewline -Encoding utf8
+$trayText = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script -Ref main -Repo $fxTrayText.Repo -OaHome $fxTrayText.Home -StatePath (Join-Path $fxTrayText.Base 'state.json') -SkipFetch -SkipBackup | Out-String
+Assert ($trayText -match 'TRAY RESTART NEEDED' -and $LASTEXITCODE -eq 0) 'T_TRAY_RESTART_TEXT' 'human output tells the operator to restart the tray'
+$trayRepeat = Invoke-Subject $Script $fxTray
+Assert ($trayRepeat.Json.deployed -eq 0 -and -not $trayRepeat.Json.trayRestartNeeded) 'T_TRAY_NOOP' 'current tray bytes need no restart'
+
+$fxTrayLocal = New-Fixture 'tray-local'
+Add-TrayFiles $fxTrayLocal.Repo
+Set-Content -LiteralPath (Join-Path $fxTrayLocal.Home 'tray-fixture.ps1') -Value '# local hotfix' -NoNewline -Encoding utf8
+$trayLocalRun = Invoke-Subject $Script $fxTrayLocal
+Assert ((Get-Class $trayLocalRun 'tray-fixture.ps1') -eq 'DIVERGENT') 'T_TRAY_REFUSE' 'a live-only tray fix is refused'
+Assert ((Get-Content -LiteralPath (Join-Path $fxTrayLocal.Home 'tray-fixture.ps1') -Raw) -eq '# local hotfix') 'T_TRAY_LOCAL_PRESERVED' 'sync never overwrites a live-only tray fix'
+Assert (-not $trayLocalRun.Json.verifiedCurrent) 'T_TRAY_REFUSE_VERDICT' 'a refused tray file cannot be called verified-current'
 
 # --- T_MUTCHECK: a guard the runner globs but no roster names (2026-08-30) -----------
 # `run-sweeps.ps1 -IncludeMutchecks` discovers mutation checks by globbing the FLAT HOME.
@@ -508,6 +567,22 @@ function New-Mutant {
   [IO.File]::WriteAllText($dst, $src.Replace($Find, $Replace), (New-Object Text.UTF8Encoding($false)))
   return $dst
 }
+
+# Removing the roster edge reproduces #724: existing tray files can be compared,
+# but a new file is invisible and verified-current falsely becomes True.
+$mTray = New-Mutant 'M_TRAY_ROSTER' '  foreach ($n in $trayFiles)                 { [void]$required.Add($n) }' '  # tray roster omitted'
+$fxTrayMutant = New-Fixture 'tray-roster-mutant'
+Add-TrayFiles $fxTrayMutant.Repo
+Set-Content -LiteralPath (Join-Path $fxTrayMutant.Home 'tray-fixture.ps1') -Value '# tray v2' -NoNewline -Encoding utf8
+$rTrayMutant = Invoke-Subject $mTray $fxTrayMutant -WhatIf
+Assert ((Get-Class $rTrayMutant 'tray-new.ps1') -eq '<absent>' -and $rTrayMutant.Json.verifiedCurrent) 'M_TRAY_ROSTER' 'without the shared roster a new tray file disappears from the verdict'
+
+$mTrayReport = New-Mutant 'M_TRAY_REPORT' '      if ($trayFiles.Contains($r.file)) { $trayRestartNeeded = $true }' '      # restart report omitted'
+$fxTrayReport = New-Fixture 'tray-report-mutant'
+Add-TrayFiles $fxTrayReport.Repo
+Set-Content -LiteralPath (Join-Path $fxTrayReport.Home 'tray-fixture.ps1') -Value '# tray v1' -NoNewline -Encoding utf8
+$rTrayReport = Invoke-Subject $mTrayReport $fxTrayReport
+Assert ($rTrayReport.Json.deployed -gt 0 -and -not $rTrayReport.Json.trayRestartNeeded) 'M_TRAY_REPORT' 'removing the restart signal is observable after deployment'
 
 # M1 - delete the historical-blob walk. Everything becomes DIVERGENT, so the tool can
 #      never say "safe" and the gap stays open forever. T_BEHIND must fail.
@@ -759,7 +834,7 @@ Assert ((Get-Class $rM15 'bomprobe.ps1') -ne 'CURRENT') 'M15' 'without the BOM s
 #       precisely the "three separate Out-String captures, fixing one changed nothing" drift
 #       the reader comment warns about, which is why there are now two arms: M16 covers the
 #       batch path that runs, M16_FALLBACK covers the per-blob path behind -NoPrefetch.
-$m16 = New-Mutant 'M16' '      $script:BlobCache[$parts[0]] = (Get-NormalizedTextFromBytes $content)' '      $script:BlobCache[$parts[0]] = ([Text.Encoding]::Unicode.GetString($content) | Out-String)'
+$m16 = New-Mutant 'M16' '      $script:BlobCache[$parts[0]] = (Get-NormalizedTextFromBytes $content)' '      $script:BlobCache[$parts[0]] = ([Text.Encoding]::UTF8.GetString($content) | Out-String)'
 $rM16 = Invoke-Subject $m16 $fxB -WhatIf
 Assert ((Get-Class $rM16 'bomprobe.ps1') -ne 'CURRENT') 'M16' 'routing the batched blob back through the host reintroduces the false mismatch'
 
@@ -849,6 +924,48 @@ Set-Content -LiteralPath (Join-Path $fxM18.Home 'probe-manifest.json') -Value '[
 $rM18 = Invoke-Subject $m18 $fxM18
 $afterM18 = Get-Content -LiteralPath (Join-Path $fxM18.Home 'probe-manifest.json') -Raw
 Assert ($afterM18 -notmatch 'locally mutated') 'M18' 'without the refusal, genuinely local data IS overwritten (this is the whole point)'
+
+# --- T_BRIDGE_TREE: deploy the bridge package by ref without touching its live state ---
+function Add-BridgePackage {
+  param([string]$Repo)
+  $package = Join-Path $Repo 'packages/telegram-bridge'
+  New-Item -ItemType Directory -Path (Join-Path $package 'bin') -Force | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $package 'src') -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $package 'package.json') -Value '{"name":"telegram-bridge"}' -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $package 'bin/telegram-bridge.js') -Value "import '../src/state.js'`n" -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $package 'src/state.js') -Value "export const revision = 'v1'`n" -NoNewline -Encoding utf8
+  Push-Location $Repo
+  try {
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'bridge v1' 2>&1 | Out-Null
+    Set-Content -LiteralPath (Join-Path $package 'src/state.js') -Value "export const revision = 'v2'`n" -NoNewline -Encoding utf8
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'bridge v2' 2>&1 | Out-Null
+    & git branch -f main HEAD 2>&1 | Out-Null
+  } finally { Pop-Location }
+}
+
+$fxBridge = New-Fixture 'bridge-tree'
+Add-BridgePackage $fxBridge.Repo
+$bridgeHome = Join-Path $fxBridge.Base 'oahome/telegram-bridge'
+New-Item -ItemType Directory -Path (Join-Path $bridgeHome 'src') -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $bridgeHome 'src/state.js') -Value "export const revision = 'v1'`n" -NoNewline -Encoding utf8
+$stateJson = '{"version":1,"updateOffset":731,"tasks":{"42":{"topicId":9}}}'
+Set-Content -LiteralPath (Join-Path $bridgeHome 'state.json') -Value $stateJson -NoNewline -Encoding utf8
+$bridgeArgs = @('-RepoPrefix','packages/telegram-bridge','-PreserveRelativePaths')
+$rBridge = Invoke-Subject $Script $fxBridge -ExtraArgs $bridgeArgs -OaHome $bridgeHome
+Assert ((Get-Class $rBridge 'src/state.js') -eq 'BEHIND') 'T_BRIDGE_TREE_BEHIND' 'a nested bridge file is classified against its exact ref path'
+Assert ((Get-Content -LiteralPath (Join-Path $bridgeHome 'src/state.js') -Raw) -match "'v2'") 'T_BRIDGE_TREE_WRITE' 'the verified ref version lands at the matching nested destination'
+Assert (Test-Path -LiteralPath (Join-Path $bridgeHome 'bin/telegram-bridge.js')) 'T_BRIDGE_TREE_MISSING' 'the deployed package includes the CLI at bin/telegram-bridge.js'
+Assert ((Get-Content -LiteralPath (Join-Path $bridgeHome 'state.json') -Raw) -eq $stateJson) 'T_BRIDGE_STATE_PRESERVED' 'the existing Telegram topic map and update offset are untouched'
+Assert ($rBridge.Json.verifiedCurrent -eq $true) 'T_BRIDGE_TREE_VERIFIED' 'the package sync verifies the deployed tree against the ref'
+
+$fxBridgeWhatIf = New-Fixture 'bridge-tree-whatif'
+Add-BridgePackage $fxBridgeWhatIf.Repo
+$bridgeWhatIfHome = Join-Path $fxBridgeWhatIf.Base 'oahome/telegram-bridge'
+$rBridgeWhatIf = Invoke-Subject $Script $fxBridgeWhatIf -WhatIf -ExtraArgs $bridgeArgs -OaHome $bridgeWhatIfHome
+Assert (-not (Test-Path -LiteralPath $bridgeWhatIfHome)) 'T_BRIDGE_TREE_WHATIF' 'WhatIf reports but never writes the package tree'
+Assert ($rBridgeWhatIf.Json.verifiedCurrent -eq $false) 'T_BRIDGE_TREE_PENDING' 'the missing package is not claimed current during WhatIf'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)

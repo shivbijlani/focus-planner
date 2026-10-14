@@ -1,0 +1,32 @@
+{
+  "fixture": "mc-above-sentinel-reply",
+  "covers": [
+    "mutcheck-above-sentinel-reply"
+  ],
+  "cases": [
+    {
+      "id": "mc/above-sentinel-reply/newer-human-message-seen",
+      "note": "new dated human message above the sentinel is unanswered_user where=above-sentinel and eligible (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/above-sentinel-reply/older-and-same-day-quiet",
+      "note": "older and same-day above-sentinel messages stay quiet",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/above-sentinel-reply/fenced-and-agent-text-quiet",
+      "note": "quoted markers and agent-attributed dated blocks above the sentinel are inert (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    },
+    {
+      "id": "mc/above-sentinel-reply/agent-only-quiet",
+      "note": "agent-only above-sentinel block is not a user reply (full scan shows the runtime verdict fields)",
+      "tool": "oa-state",
+      "command": "scan"
+    }
+  ]
+}

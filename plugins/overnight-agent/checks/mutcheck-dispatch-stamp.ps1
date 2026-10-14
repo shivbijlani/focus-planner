@@ -4,26 +4,12 @@
 
   WHY THIS EXISTS
   ---------------
-  `session.last_woken_at` was maintained by NOTHING except a sentence of prose in SKILL.md PHASE 1
-  ("stamp -SessionWoken once it responds"). Two guards read it, and a run that skipped the
-  sentence broke both -- in OPPOSITE directions:
+  `session.last_woken_at` was maintained by a prose-only `-SessionWoken` call. The one-turn-per-wake
+  guard read an old stamp as current and refused a fresh author. The direct dispatch path now
+  records the wake at its authorization boundary, and this check proves that inspection and
+  binding still do not stamp.
 
-    * the one-turn-per-wake guard read the stale stamp as authoritative and refused EVERY author,
-      so the wake recorded nothing at all;
-    * `Test-SessionHoldsCapacity` read its staleness as "nobody is working this", parked the row
-      and offered its slot away while the session holding it was mid-flight.
-
-  Measured 2026-09-07 on task #468: stamp written 19:43, a fresh run re-dispatched at 21:55, the
-  turn guard refused at 22:00 naming a turn two hours and one run old, and the capacity view did
-  not count the live session until the stamp was written BY HAND at 22:59.
-
-  Neither symptom is repairable where the field is READ. The turn guard only had to stop trusting
-  a stamp too old to be about the current wake (shipped). The capacity park needs the field to be
-  TRUE, not merely trusted -- "nobody is working this" is a claim about the world -- and teaching
-  it to read staleness as activity re-opens #487 and un-parks exactly what #500 exists to park.
-  World O of `mutcheck-parked-capacity` already pins that as deliberate.
-
-  So the repair is on the WRITE side, and this check pins its shape.
+  The repair is on the WRITE side, and this check pins its shape.
 
   THE TRAP THIS CHECK EXISTS TO KILL
   ----------------------------------
@@ -31,11 +17,8 @@
   and that path already writes. It is wrong, because BINDING IS NOT WAKING -- a run can bind a
   session and then fail to wake it, and a stamp written there records a wake that never happened.
 
-  Note the direction. Every symptom above is the stamp being ABSENT, and both are LOUD: the guard
-  refuses and says so, the park over-offers and surfaces as contention. A stamp PRESENT when it
-  should be absent is the #514 direction and is SILENT -- a second turn reaches the page and
-  nothing reports it. Closing a loud failure by opening a quiet one is not a fix, which is why
-  arm A3 exists and why mutant D must die.
+  A stamp PRESENT when it should be absent is the #514 direction and is SILENT -- a second turn
+  reaches the page and nothing reports it. That is why arm A3 exists and why mutant D must die.
 
   It runs the REAL oa-state.ps1 against an isolated -StateDir, so live state is never touched.
 
@@ -46,6 +29,8 @@
           -> dispatch_authorised: true, and last_woken_at advances before the send
     A3  binding a session does NOT stamp it
           -> a bind followed by no wake never leaves a fresh last_woken_at
+    A4  -ForDispatch requires the exact dispatch_input from scan
+    A5  changed fingerprints and user pauses cannot be stamped
 
   MUTANTS (each must break exactly the arm named)
     B_alwaysAuthorised  authority granted to every read, asked for or not     -> A1
@@ -72,28 +57,19 @@ if (-not $ScriptPath) {
 }
 $Subject = $ScriptPath
 if (-not $Subject -or -not (Test-Path $Subject)) { throw "subject not found: $Subject" }
-
-# Normalised to LF before any mutation: the working tree is CRLF on Windows, so patterns written
-# against LF would match nothing and every mutant would "survive" for a reason unrelated to the
-# subject. A mutation that fails to apply is reported as a failure, never counted as a kill.
-$Source = (Get-Content -Raw $Subject) -replace "`r`n", "`n"
+. (Join-Path (Split-Path -Parent $Subject) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $Subject
 
 $Tmp = Join-Path ([IO.Path]::GetTempPath()) ("mutcheck-dispatch-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
 
 function New-Subject {
-  param([string]$Name, [scriptblock]$Mutate)
-  $src = $Source
-  if ($Mutate) {
-    $next = & $Mutate $src
-    if ($next -eq $src) { throw "mutation $Name did not change the source" }
-    $src = $next
-  }
-  $dir = Join-Path $Tmp $Name
-  New-Item -ItemType Directory -Path $dir -Force | Out-Null
-  $path = Join-Path $dir 'oa-state.ps1'
-  [IO.File]::WriteAllText($path, $src, (New-Object Text.UTF8Encoding $false))
-  return $path
+  param([string]$Name, [string]$Find = $null, [string]$Replace = $null, [string]$JsFind = $null, [string]$JsReplace = $null)
+  if (-not $Find) { return $Subject }
+  $needle = if ($script:TargetIsNode) { $JsFind } else { $Find }
+  $with = if ($script:TargetIsNode) { $JsReplace } else { $Replace }
+  if (-not $needle) { throw "mutation $Name has no Node twin" }
+  return New-OaStateMutant $Subject $Name $needle $with (Join-Path $Tmp 'mutants')
 }
 
 # A store holding one task with a live binding and a wake stamp that is OLD but present -- the
@@ -134,6 +110,7 @@ function New-Store {
   Set-Content -Path (Join-Path $dir 'planner.md') -Value "## Today`n`n| ID | Task |`n|---|---|`n| 999 | fixture |" -Encoding utf8
   Set-Content -Path (Join-Path $dir 'completed.md') -Value '' -Encoding utf8
   Set-Content -Path (Join-Path $dir 'snooze.json') -Value '{}' -Encoding utf8
+  Set-Content -Path (Join-Path $dir 'sessions-status.json') -Value '{"sessions":[{"id":"aa358d1c-4c54-40cb-8809-619bd9bda3d7","activity":{"status":"idle"}}]}' -Encoding utf8
   return $dir
 }
 
@@ -154,13 +131,36 @@ function Read-Stamp {
 
 function Invoke-Session {
   param([string]$SubjectPath, [string]$StateDir, [string[]]$Extra = @())
-  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SubjectPath, 'session', '-Id', '999',
+  $cmd = Get-OaStateCommand $SubjectPath
+  $argv = @('session', '-Id', '999',
     '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-SessionStateDir', (Join-Path $StateDir 'session-state'),
     '-PlannerBoard', (Join-Path $StateDir 'planner.md'), '-PlannerCompleted', (Join-Path $StateDir 'completed.md'),
     '-SnoozeStore', (Join-Path $StateDir 'snooze.json'), '-UserSettings', (Join-Path $StateDir 'absent-settings.md')) + $Extra
-  $out = & pwsh @argv 2>&1
+  if ($Extra -contains '-ForDispatch') { $argv += @('-SessionsStatusFile', (Join-Path $StateDir 'sessions-status.json')) }
+  $out = & $cmd.Exe @($cmd.Prefix + $argv) 2>&1
   $text = ($out | Out-String)
+  $script:LastExitCode = $LASTEXITCODE
+  $script:LastSessionOutput = $text
   try { return ($text | ConvertFrom-Json) } catch { return $null }
+}
+
+function Get-DispatchInput {
+  param([string]$SubjectPath, [string]$StateDir)
+  $cmd = Get-OaStateCommand $SubjectPath
+  $argv = @('scan',
+    '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-SessionStateDir', (Join-Path $StateDir 'session-state'),
+    '-PlannerBoard', (Join-Path $StateDir 'planner.md'),
+    '-PlannerCompleted', (Join-Path $StateDir 'completed.md'),
+    '-SnoozeStore', (Join-Path $StateDir 'snooze.json'),
+    '-UserSettings', (Join-Path $StateDir 'absent-settings.md'))
+  $out = & $cmd.Exe @($cmd.Prefix + $argv) 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "scan failed while preparing the dispatch fingerprint: $out" }
+  $rows = (($out | Out-String) | ConvertFrom-Json)
+  $row = @($rows | Where-Object { "$($_.id)" -eq '999' }) | Select-Object -First 1
+  if (-not $row -or -not $row.dispatch_input) { throw 'scan did not return task 999 dispatch_input' }
+  return "$($row.dispatch_input)"
 }
 
 function Test-Arms {
@@ -179,13 +179,15 @@ function Test-Arms {
   }
   if ($s1 -ne $StaleStamp) { $f += "A1: a plain read moved last_woken_at to '$s1' -- an inspection that stamps is #514" }
 
-  # A2 -- the eligibility check does not stamp; the dispatch call stamps before native send.
+  # A2 -- the eligibility check does not stamp; direct dispatch requires a scan hash and stamps
+  # only after rechecking the task.
   $d2 = New-Store
   $checked = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-CheckDispatch')
   if (-not $checked.dispatch_eligible -or $checked.dispatch_authorised -or (Read-Stamp $d2) -ne $StaleStamp) {
     $f += 'A2: eligibility check was not read-only'
   }
-  $r2 = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-ForDispatch')
+  $hash2 = Get-DispatchInput -SubjectPath $SubjectPath -StateDir $d2
+  $r2 = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-ForDispatch', '-DispatchInput', $hash2)
   $s2 = Read-Stamp $d2
   if (-not $r2) {
     $f += 'A2: -ForDispatch produced no parseable verdict'
@@ -195,6 +197,39 @@ function Test-Arms {
   }
   if ($s2 -eq $StaleStamp) { $f += 'A2: -ForDispatch answered but left last_woken_at stale' }
   elseif ($s2 -eq '<no-session>' -or $s2 -eq '<no-state>') { $f += "A2: -ForDispatch destroyed the binding ($s2)" }
+
+  # A4 -- omitting the scan fingerprint must not turn authorisation into a bypass.
+  $d4 = New-Store
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d4 -Extra @('-ForDispatch'))
+  $stamp4 = Read-Stamp $d4
+  if ($script:LastSessionOutput -notmatch 'session_input_required' -or $stamp4 -ne $StaleStamp) {
+    $f += "A4: missing dispatch_input exit=$script:LastExitCode stamp='$stamp4' output='$($script:LastSessionOutput.Trim())'"
+  }
+
+  # A5 -- stale input and a human pause are both rejected before stamping.
+  $d5 = New-Store
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d5 -Extra @(
+    '-ForDispatch', '-DispatchInput', 'stale-dispatch-input'))
+  $stamp5 = Read-Stamp $d5
+  if ($script:LastSessionOutput -notmatch 'session_input_changed' -or $stamp5 -ne $StaleStamp) {
+    $f += "A5: stale dispatch_input exit=$script:LastExitCode stamp='$stamp5' output='$($script:LastSessionOutput.Trim())'"
+  }
+  $d6 = New-Store
+  $statePath = Join-Path $d6 'task-999.json'
+  $pausedState = [IO.File]::ReadAllText($statePath).Replace(
+    '"status": "in-progress"',
+    '"status": "blocked", "status_by": "user", "paused_at": "2026-09-07T19:40:00-07:00"')
+  [IO.File]::WriteAllText($statePath, $pausedState, [Text.UTF8Encoding]::new($false))
+  $hash6 = Get-DispatchInput -SubjectPath $SubjectPath -StateDir $d6
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d6 -Extra @(
+    '-ForDispatch', '-DispatchInput', $hash6))
+  $stamp6 = Read-Stamp $d6
+  # #734: the refusal is NAMED. It used to arrive as the generic `session_not_dispatchable`,
+  # which reads as "the binding needs attention" and invites a caller to repair the binding and
+  # dispatch anyway. A pause is not a binding fault, so the token says who stopped this.
+  if ($script:LastSessionOutput -notmatch 'session_user_paused' -or $stamp6 -ne $StaleStamp) {
+    $f += "A5: user-paused dispatch exit=$script:LastExitCode stamp='$stamp6' output='$($script:LastSessionOutput.Trim())'"
+  }
 
   # A3 -- binding is not waking. A run binds a session and may then fail to wake it, so a bind
   # must never leave a stamp that says a wake happened. The assertion is deliberately about the
@@ -223,7 +258,7 @@ Write-Host ''
 Write-Host 'mutcheck-dispatch-stamp -- GH #532 dispatch authority cannot be obtained unstamped'
 Write-Host ''
 
-$baseSubject = New-Subject -Name 'baseline' -Mutate $null
+$baseSubject = New-Subject -Name 'baseline'
 $baseline = Test-Arms -SubjectPath $baseSubject
 if ($baseline.Count) {
   foreach ($x in $baseline) { Write-Host "  FAIL  baseline  $x" -ForegroundColor Red }
@@ -234,17 +269,44 @@ if ($baseline.Count) {
 $mutants = @(
   # The verdict authorises everything, so a run that never declared a dispatch is told it may
   # dispatch -- exactly the ambiguity the field exists to remove.
-  @{ Name = 'B_alwaysAuthorised'; Expect = 'A1'; Mutate = {
-      param($s) $s.Replace('dispatch_authorised = [bool]$ForDispatch', 'dispatch_authorised = $true') } }
+  @{
+    Name = 'B_alwaysAuthorised'; Expect = 'A1'
+    Find = 'dispatch_authorised = [bool]$ForDispatch'
+    Replace = 'dispatch_authorised = $true'
+    JsFind = 'dispatch_authorised: !!ctx.p.ForDispatch,'
+    JsReplace = 'dispatch_authorised: true,'
+  }
   # -ForDispatch answers the question but does not record the wake: the verdict and the stamp go
   # back to being two events joined by nothing.
-  @{ Name = 'C_neverStamp'; Expect = 'A2'; Mutate = {
-      param($s) $s.Replace('if ($SessionWoken -or $ForDispatch) {', 'if ($SessionWoken) {') } }
+  @{
+    Name = 'C_neverStamp'; Expect = 'A2'
+    Find = '  if ($ForDispatch) {'
+    Replace = '  if ($false) {'
+    JsFind = '  if (ctx.p.ForDispatch) {'
+    JsReplace = '  if (false) {'
+  }
   # THE TRAP. Stamp on bind: cheap, plausible, and it records wakes that never happened.
-  @{ Name = 'D_stampOnBind'; Expect = 'A3'; Mutate = {
-      param($s) $s.Replace(
-        "-LastWokenAt `$(if (`$sess -and `"`$(`$sess.session_id)`" -eq `$SessionId) { `$sess.last_woken_at } else { '' }) ``",
-        "-LastWokenAt (Now-Iso) ``") } }
+  @{
+    Name = 'D_stampOnBind'; Expect = 'A3'
+    Find = "-LastWokenAt `$(if (`$sess -and `"`$(`$sess.session_id)`" -eq `$SessionId) { `$sess.last_woken_at } else { '' }) ``"
+    Replace = "-LastWokenAt (Now-Iso) ``"
+    JsFind = "    const lastWoken = sess && oldSessionId === ctx.p.SessionId ? get(sess, 'last_woken_at') : '';"
+    JsReplace = "    const lastWoken = nowIso();"
+  }
+  @{
+    Name = 'E_missingDispatchInputAllowed'; Expect = 'A4'
+    Find = "if (`$ForDispatch -and [string]::IsNullOrWhiteSpace(`$DispatchInput)) {"
+    Replace = 'if ($false) {'
+    JsFind = '  if (ctx.p.ForDispatch && isNullOrWhiteSpace(ctx.p.DispatchInput)) {'
+    JsReplace = '  if (false) {'
+  }
+  @{
+    Name = 'F_changedDispatchInputAllowed'; Expect = 'A5'
+    Find = 'if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {'
+    Replace = 'if ($false) {'
+    JsFind = "  if (ctx.p.DispatchInput && ctx.p.DispatchInput !== psStr(get(row, 'dispatch_input'))) {"
+    JsReplace = '  if (false) {'
+  }
 )
 
 Write-Host ''
@@ -252,7 +314,7 @@ Write-Host 'MUTATION ARMS'
 $survived = @()
 foreach ($m in $mutants) {
   try {
-    $p = New-Subject -Name $m.Name -Mutate $m.Mutate
+    $p = New-Subject -Name $m.Name -Find $m.Find -Replace $m.Replace -JsFind $m.JsFind -JsReplace $m.JsReplace
   } catch {
     Write-Host ("  [ERROR  ] {0,-20} {1}" -f $m.Name, $_.Exception.Message) -ForegroundColor Red
     $survived += $m.Name

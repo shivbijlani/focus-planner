@@ -125,7 +125,7 @@ $files = $names | Sort-Object | ForEach-Object { [pscustomobject]@{ Name = $_ } 
 # a second copy of a file that already has one, which is how "which of these two is the
 # real one?" starts -- the same question this whole exercise exists to make unaskable.
 # repo-drift-sweep.mjs routes them the same way (SKILL_OWNED); this mirrors it.
-$skillOwned = @('write-turn.ps1', 'mutcheck-write-turn.ps1', 'reap-stale-mcp.ps1', 'oa-state.ps1', 'oa-state.Tests.ps1')
+$skillOwned = @('write-turn.ps1', 'write-turn.mjs', 'mutcheck-write-turn.ps1', 'reap-stale-mcp.ps1', 'oa-state.ps1', 'oa-state.Tests.ps1')
 $skipped = @($files | Where-Object { $skillOwned -contains $_.Name })
 if ($skipped.Count -gt 0) {
   $files = @($files | Where-Object { $skillOwned -notcontains $_.Name })

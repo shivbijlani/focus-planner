@@ -1,0 +1,59 @@
+{
+  "files": {
+    "state/task-931.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "doc": {
+          "bound_at": "2020-01-01T12:00:00Z",
+          "doc_id": "DOC931",
+          "doc_url": "https://docs.google.com/document/d/DOC931/edit",
+          "observed_at": "<NOW-360m>",
+          "pending_ids": [],
+          "seen_ids": [
+            "OLD931"
+          ]
+        },
+        "has_agent_block": true,
+        "id": "931",
+        "last_turn_at": "2020-01-01T12:00:00Z",
+        "last_turn_by": "sess-char",
+        "plan_id": "t931-v1",
+        "processed_file_hash": "594064a6d2b708de71b854912504359129217fcef430d6e5f4cbaa5879f400bc",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/observe-bound-docs/unreadable-observe-does-not-refresh",
+  "steps": [
+    {
+      "args": {
+        "Id": "931",
+        "Observe": "<ROOT>/lad/overnight-agent/dead-931.txt"
+      },
+      "command": "doc",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "doc_id": "DOC931",
+        "doc_url": "https://docs.google.com/document/d/DOC931/edit",
+        "healed": false,
+        "id": "931",
+        "journal_stamp_mismatch_id": null,
+        "journal_stamped": false,
+        "new_comment_ids": null,
+        "new_comments": null,
+        "observation": "unreadable",
+        "observed_at": "<INVTIME+60m>",
+        "seen_comments": 1,
+        "source": "state"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}
