@@ -130,24 +130,49 @@ export function reopen(docId, commentId, rev) {
 
 // ── Drafts: on-device until "Send to agent" ────────────────────────────────
 
-const draftKey = (docId) => `fp-docs-drafts:${docId}`
-
-export function loadDrafts(docId) {
-  try {
-    const v = JSON.parse(localStorage.getItem(draftKey(docId)) || '[]')
-    return Array.isArray(v) ? v : []
-  } catch { return [] }
+export function draftScopeKey(scope) {
+  if (!scope || typeof scope.accountId !== 'string' || !scope.accountId.trim()
+    || typeof scope.sourceId !== 'string' || !scope.sourceId.trim()) {
+    throw new Error('Docs drafts require nonempty accountId and sourceId')
+  }
+  return JSON.stringify([scope.accountId, scope.sourceId])
 }
 
-export function saveDrafts(docId, drafts) {
+export const draftKey = (docId, scope) => `fp-docs-drafts:v2:${JSON.stringify([draftScopeKey(scope), docId])}`
+
+export function legacyDraftNotice(docId) {
   try {
-    if (drafts.length) localStorage.setItem(draftKey(docId), JSON.stringify(drafts))
-    else localStorage.removeItem(draftKey(docId))
-  } catch { /* storage full: drafts stay in memory for this session */ }
+    return localStorage.getItem(`fp-docs-drafts:${docId}`)
+      ? 'Older, unscoped drafts are retained on this device but cannot safely be attributed to this account and source. They have not been loaded or deleted.'
+      : null
+  } catch (error) {
+    throw new Error(`Couldn't check older Docs drafts: ${error.message}`, { cause: error })
+  }
 }
 
-export function draftCount(docId) {
-  return loadDrafts(docId).length
+export function loadDrafts(docId, scope) {
+  const key = draftKey(docId, scope)
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || '[]')
+    if (!Array.isArray(v)) throw new Error('Stored drafts are not an array')
+    return v
+  } catch (error) {
+    throw new Error(`Couldn't load Docs drafts: ${error.message}`, { cause: error })
+  }
+}
+
+export function saveDrafts(docId, drafts, scope) {
+  const key = draftKey(docId, scope)
+  try {
+    if (drafts.length) localStorage.setItem(key, JSON.stringify(drafts))
+    else localStorage.removeItem(key)
+  } catch (error) {
+    throw new Error(`Couldn't save Docs drafts; keep this page open to retain unsent comments: ${error.message}`, { cause: error })
+  }
+}
+
+export function draftCount(docId, scope) {
+  return loadDrafts(docId, scope).length
 }
 
 export { emptyReview }

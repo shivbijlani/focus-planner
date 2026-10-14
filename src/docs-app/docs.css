@@ -1,6 +1,7 @@
 /* Docs — a light, paper-like reader. Phone first; widens into a centred page with a
    side comments panel on desktop. Deliberately separate from the planner's dark theme. */
-:root {
+@scope (.docs-app) {
+:scope {
   --dx-bg: #f6f7f9;
   --dx-page: #ffffff;
   --dx-ink: #1f2328;
@@ -20,14 +21,15 @@
   --dx-safe-bottom: env(safe-area-inset-bottom, 0px);
   color-scheme: light;
 }
-* { box-sizing: border-box; }
-html, body { margin: 0; background: var(--dx-bg); color: var(--dx-ink); }
-body {
+*, :scope { box-sizing: border-box; }
+:scope {
+  margin: 0; background: var(--dx-bg); color: var(--dx-ink);
   font: 17px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   -webkit-text-size-adjust: 100%;
 }
 button { font: inherit; color: inherit; }
 a { color: var(--dx-accent); }
+.dx-boot-warning { padding: 12px 20px; color: var(--dx-warn); background: var(--dx-page); border-bottom: 1px solid var(--dx-line); }
 
 .dx-loading, .dx-empty-page { padding: 48px 24px; text-align: center; color: var(--dx-ink-2); }
 .dx-empty-page h1 { font-size: 28px; color: var(--dx-ink); }
@@ -279,3 +281,4 @@ mark.hl-docs-focus { background: var(--dx-hl-focus); color: inherit; }
 .dx-history-item.is-on { background: var(--dx-accent-soft); }
 .dx-history-rev { font-weight: 600; }
 .dx-history-summary { grid-column: 1 / -1; font-size: 14px; color: var(--dx-ink-2); }
+}

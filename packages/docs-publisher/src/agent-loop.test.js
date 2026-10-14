@@ -10,7 +10,7 @@ import { publish } from './publisher.js'
 
 const repo = process.cwd()
 const skill = path.join(repo, 'plugins', 'overnight-agent', 'skills', 'overnight-agent')
-const publisher = path.join(repo, 'packages', 'docs-publisher', 'bin', 'fp-docs.js')
+const publisher = path.join(repo, 'scripts', 'fp-docs.js')
 const roots = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))) })
 

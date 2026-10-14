@@ -9,13 +9,15 @@ import { createProvider } from '../storage/registry.js'
 import {
   loadSources, getSources, getActiveSourceId, restoreSource, setActiveSource,
 } from '../storage/sources.js'
+import { plannerUrl } from './util.js'
 
-export function plannerUrl() {
-  const base = (import.meta.env?.BASE_URL || '/')
-  return `${base}`
-}
+export { plannerUrl }
 
-export async function bootStorage() {
+export async function bootStorage({ host = {}, profile, signal } = {}) {
+  signal?.throwIfAborted()
+  const consumer = !profile || profile.deploymentMode === 'consumer-web'
+  const allowFallback = consumer && profile?.docs?.allowBrowserFallback !== false
+  const warnings = []
   // OAuth redirects must land on a registered redirect URI (the planner root).
   storage.configureEngine({ redirectUri: `${window.location.origin}${plannerUrl()}` })
   loadSources()
@@ -25,18 +27,36 @@ export async function bootStorage() {
   if (selectedId) {
     try {
       const provider = await restoreSource(selectedId)
+      signal?.throwIfAborted()
       if (provider) { await setActiveSource(selectedId); activeId = selectedId }
-      else activeId = null
-    } catch { activeId = null }
+      else throw new Error(`Storage source ${selectedId} could not be restored`)
+    } catch (error) {
+      signal?.throwIfAborted()
+      if (!allowFallback) throw error
+      warnings.push(`Couldn't restore the selected storage: ${error.message}. Using browser storage instead.`)
+    }
   }
   if (!activeId) {
+    if (!allowFallback) throw new Error('Docs requires a restored storage source; browser fallback is disabled')
     const fallback = createProvider(storage.PROVIDERS.LOCAL_STORAGE)
-    await fallback.restore()
+    if (!await fallback.restore()) throw new Error('Docs browser storage could not be restored')
+    signal?.throwIfAborted()
     storage.setActiveProvider(fallback)
   }
   try {
     await storage.registerSyncWorker()
+    signal?.throwIfAborted()
     await storage.restoreSyncTargets()
-  } catch { /* sync is best-effort; local reads still work */ }
-  return { hasSources: sources.length > 0, activeId }
+    signal?.throwIfAborted()
+  } catch (error) {
+    signal?.throwIfAborted()
+    if (!consumer) throw error
+    warnings.push(`Docs sync is unavailable: ${error.message}`)
+  }
+  const accountId = host.docsAccountId || host.identity?.id || (consumer ? 'consumer-browser' : null)
+  if (!accountId) throw new Error('Docs requires an account identity from its host')
+  return {
+    hasSources: sources.length > 0, activeId, warnings,
+    draftScope: { accountId, sourceId: activeId || 'browser-local' },
+  }
 }

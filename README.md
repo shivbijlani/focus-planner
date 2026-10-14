@@ -43,7 +43,15 @@ whole-document approval. Google documents and Markdown briefings are not migrate
 
 For installed plugins, configure `FOCUS_PLANNER_REPO` to the matching deployed repository
 and `PLANNER_PATH` to the planner data folder for `fp-docs`. Run
-`node packages\docs-publisher\bin\fp-docs.js --help` from that repository.
+`node scripts\fp-docs.js --help` from that repository. This consumer launcher enforces
+the agent's sandbox, lane, task-status, and session-ownership guards. The standalone
+`@focus/docs-publisher` package has no plugin dependency; its CLI requires explicit
+deployment guards rather than silently permitting writes.
+
+Docs deployments can replace `#planner/docs-bootstrap` through
+`VITE_DOCS_BOOTSTRAP_MODULE`, alongside the existing host/profile/storage-bootstrap
+aliases. See [Docs deployment seams](docs/docs-deployment-seams.md) for boot policy,
+account/source draft isolation, embedded styling, and publisher guard contracts.
 See [the behavior contract](docs/spec/Domain-docs.md) and
 [the publishing procedure](plugins/overnight-agent/skills/docs-publish/SKILL.md).
 

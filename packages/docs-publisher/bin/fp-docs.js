@@ -2,10 +2,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { DocsPublisherError, acknowledgeReview, lintDraft, publish, readComments, readStatus, readStatuses } from '../src/index.js'
-import { assertSandboxPath } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/core/context.mjs'
-import { assertDocsTaskWritable } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/act/native-docs-guard.mjs'
 
 const USAGE = `fp-docs — publish and inspect Focus Planner Docs
 
@@ -59,7 +57,7 @@ function positiveInteger(value, label) {
   return Number(value)
 }
 
-async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), guards) {
   const { positional = [], flags = new Map(), help } = argumentsOf(argv)
   if (help) {
     console.log(USAGE.trim())
@@ -81,17 +79,25 @@ async function main(argv = process.argv.slice(2)) {
   }
   const root = process.env.PLANNER_PATH
   if (!root) throw new DocsPublisherError('D09 data', 'PLANNER_PATH is not set', 'set it to the planner data folder')
-  assertSandboxPath(root, 'PLANNER_PATH')
+  if (!guards && process.env.FP_DOCS_GUARD_MODULE) {
+    guards = await import(pathToFileURL(path.resolve(process.env.FP_DOCS_GUARD_MODULE)).href)
+  }
+  if (typeof guards?.assertPath !== 'function' || typeof guards?.assertWritable !== 'function') {
+    throw new DocsPublisherError('D09 policy', 'Docs CLI requires assertPath and assertWritable guards', 'use the deployment launcher or set FP_DOCS_GUARD_MODULE')
+  }
+  const { assertPath, assertWritable } = guards
+  await assertPath(root, 'PLANNER_PATH')
   for (const flag of ['--draft', '--dispositions']) {
-    if (flags.has(flag)) assertSandboxPath(path.resolve(flags.get(flag)), flag)
+    if (flags.has(flag)) await assertPath(path.resolve(flags.get(flag)), flag)
   }
   if (command === 'ack' || command === 'publish') {
-    assertDocsTaskWritable({ root, task: positiveInteger(need(flags, '--task'), '--task') })
+    await assertWritable({ root, task: positiveInteger(need(flags, '--task'), '--task') })
   }
   if (command === 'ack') {
     const result = await acknowledgeReview({
       root, task: positiveInteger(need(flags, '--task'), '--task'),
       review: need(flags, '--review'), doc: flags.get('--doc'),
+      assertWritable,
     })
     console.log(JSON.stringify(result))
     return 0
@@ -120,7 +126,7 @@ async function main(argv = process.argv.slice(2)) {
       }
       const target = spec.slice(0, separator)
       const linkedPath = path.resolve(spec.slice(separator + 1))
-      assertSandboxPath(linkedPath, '--linked')
+      await assertPath(linkedPath, '--linked')
       if (target.startsWith('new:')) {
         linked.push({ alias: target.slice(4), draft: await fs.readFile(linkedPath) })
       } else {
@@ -157,6 +163,7 @@ async function main(argv = process.argv.slice(2)) {
       dispositions,
       partial: flags.has('--partial'),
       reason: flags.get('--reason') || '',
+      assertWritable,
     })
     console.log(`Published ${result.id} revision ${result.rev}`)
     return 0

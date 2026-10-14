@@ -2,12 +2,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import * as storage from '../storage/storage.js'
 import { parseRoute, docHref } from '../../packages/docs-core/src/index.js'
-import { bootStorage, plannerUrl } from './storageBoot.js'
-import { loadIndex } from './docsStore.js'
+import { bootStorage as defaultBootStorage } from '#planner/docs-bootstrap'
+import { useHost } from '#planner/host-provider'
+import { deploymentProfile } from '#planner/deployment-profile'
+import { plannerUrl } from './util.js'
+import { draftScopeKey, loadIndex } from './docsStore.js'
 import Library from './Library.jsx'
 import DocView from './DocView.jsx'
 
-export default function DocsApp() {
+export default function DocsApp({ sessionKey, bootStorage = defaultBootStorage }) {
+  const host = useHost()
+  // The host must change its session key on account OR source changes.
+  const key = JSON.stringify([sessionKey ?? host.docsSessionKey ?? null, host.identity ?? null, host.docsAccountId ?? null])
+  return <div className="docs-app"><DocsSession key={key} host={host} bootStorage={bootStorage} /></div>
+}
+
+function DocsSession({ host, bootStorage }) {
   const [boot, setBoot] = useState(null)
   const [index, setIndex] = useState(undefined)
   const [indexError, setIndexError] = useState(null)
@@ -15,8 +25,14 @@ export default function DocsApp() {
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    bootStorage().then(setBoot).catch((e) => setBoot({ error: String(e?.message || e) }))
-  }, [])
+    let cancelled = false
+    const controller = new AbortController()
+    Promise.resolve().then(() => bootStorage({ host, profile: deploymentProfile, signal: controller.signal })).then((result) => {
+      draftScopeKey(result?.draftScope)
+      if (!cancelled) setBoot(result)
+    }).catch((e) => { if (!cancelled) setBoot({ error: String(e?.message || e) }) })
+    return () => { cancelled = true; controller.abort() }
+  }, [bootStorage, host])
 
   const refreshIndex = useCallback(() => loadIndex().then((next) => {
     setIndex(next)
@@ -69,7 +85,7 @@ export default function DocsApp() {
   }, [route, index])
 
   if (!boot) return <div className="dx-loading">Opening Docs…</div>
-  if (boot.error) return <div className="dx-empty-page"><p>Couldn't open storage: {boot.error}</p></div>
+  if (boot.error) return <div className="dx-empty-page" role="alert"><p>Couldn't open storage: {boot.error}</p></div>
   if (indexError) return <div className="dx-empty-page" role="alert"><h1>Docs unavailable</h1><p>{indexError}</p></div>
   if (!boot.hasSources && !index) {
     return (
@@ -82,8 +98,10 @@ export default function DocsApp() {
   }
   if (index === undefined) return <div className="dx-loading">Loading…</div>
 
-  if (route.view === 'doc') {
-    return <DocView key={route.docId} docId={route.docId} index={index} route={route} onOpenDoc={openDoc} onBack={goBack} reloadKey={reloadKey} />
-  }
-  return <Library index={index} onOpenDoc={openDoc} plannerHref={plannerUrl()} reloadKey={reloadKey} />
+  return <>
+    {boot.warnings?.map((warning) => <div className="dx-boot-warning" role="alert" key={warning}>{warning}</div>)}
+    {route.view === 'doc'
+      ? <DocView key={`${draftScopeKey(boot.draftScope)}:${route.docId}`} draftScope={boot.draftScope} docId={route.docId} index={index} route={route} onOpenDoc={openDoc} onBack={goBack} reloadKey={reloadKey} />
+      : <Library key={draftScopeKey(boot.draftScope)} draftScope={boot.draftScope} index={index} onOpenDoc={openDoc} plannerHref={plannerUrl()} reloadKey={reloadKey} />}
+  </>
 }

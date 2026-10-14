@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": ["packages/docs-core", "packages/docs-publisher"],
   "scripts": {
     "predev": "node scripts/copy-sw.mjs",
     "dev": "vite",

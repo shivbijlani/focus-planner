@@ -6,7 +6,7 @@ import {
   INTENT_META,
 } from '../../packages/docs-core/src/index.js'
 import {
-  loadDoc, loadHistory, loadDrafts, saveDrafts, sendDrafts, markRead, reopen,
+  loadDoc, loadHistory, loadDrafts, legacyDraftNotice, saveDrafts, sendDrafts, markRead, reopen,
 } from './docsStore.js'
 import { selectionToAnchor, blockAnchor, blockTexts, rangeFor, paintHighlights, BLOCK_SEL } from './selection.js'
 import { CommentSheet, CommentsPanel, OutlineSheet, HistorySheet } from './Sheets.jsx'
@@ -51,10 +51,16 @@ function useIsWide() {
   return wide
 }
 
-export default function DocView({ docId, index, route, onOpenDoc, onBack, reloadKey }) {
+export default function DocView({ docId, draftScope, index, route, onOpenDoc, onBack, reloadKey }) {
   const [data, setData] = useState(null)
   const [loadError, setLoadError] = useState(null)
-  const [drafts, setDrafts] = useState(() => loadDrafts(docId))
+  const [initialDrafts] = useState(() => {
+    try { return { drafts: loadDrafts(docId, draftScope), notice: legacyDraftNotice(docId), error: null } }
+    catch (error) { return { drafts: [], error: error.message } }
+  })
+  const [drafts, setDrafts] = useState(initialDrafts.drafts)
+  const [draftError, setDraftError] = useState(initialDrafts.error)
+  const [storageError, setStorageError] = useState(null)
   const [baseline, setBaseline] = useState(null) // { readRev, changed:Set }
   const [viewing, setViewing] = useState(null) // { rev, parsed, changed }
   const [placements, setPlacements] = useState({})
@@ -96,8 +102,12 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
     return () => { cancelled = true }
   }, [docId, index, reloadKey])
 
-  useEffect(() => { setDrafts(loadDrafts(docId)); markedReadRef.current = false; setViewing(null); setBaseline(null) }, [docId])
-  useEffect(() => { saveDrafts(docId, drafts) }, [docId, drafts])
+  useEffect(() => {
+    // Never overwrite unreadable drafts with the empty in-memory state.
+    if (initialDrafts.error) return
+    try { saveDrafts(docId, drafts, draftScope); setDraftError(null) }
+    catch (error) { setDraftError(error.message) }
+  }, [docId, drafts, draftScope, initialDrafts])
 
   const rev = data ? (data.parsed.header?.rev ?? data.response.rev) : 0
   const shown = viewing ? viewing.parsed : data?.parsed
@@ -250,7 +260,7 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
     }
     setSheet(null)
     clearSelection()
-    flash('Draft saved')
+    flash('Draft added')
   }
 
   const doSend = async () => {
@@ -262,7 +272,9 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
       const n = drafts.length
       setDrafts([])
       flash(`Sent ${n} comment${n === 1 ? '' : 's'} to the agent`)
+      setStorageError(null)
     } catch (e) {
+      setStorageError(`Couldn't send: ${e?.message || e}`)
       flash(`Couldn't send: ${e?.message || e}`)
     } finally {
       setSending(false)
@@ -276,7 +288,11 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
       const review = await markRead(docId, rev)
       setData((d) => ({ ...d, review }))
       if (!quiet) flash(`Marked r${rev} as read`)
-    } catch { /* offline: try again next time */ }
+      setStorageError(null)
+    } catch (error) {
+      markedReadRef.current = false
+      setStorageError(`Couldn't mark this document as read: ${error.message}`)
+    }
   }, [data, viewing, rev, docId])
 
   // readRev advances when the reader reaches the end of the doc.
@@ -367,6 +383,7 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
   if (loadError) {
     return (
       <div className="dv">
+        {draftError && <div className="dx-boot-warning" role="alert">{draftError}</div>}
         <AppBar title={entry?.title || docId} onBack={onBack} />
         <div className="dx-empty-page"><p>{loadError}</p><p className="dx-hint">If you just created it, give sync a moment and pull to refresh.</p></div>
       </div>
@@ -383,6 +400,9 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
 
   return (
     <div className={`dv${wide && sheet?.type === 'comments' ? ' has-side' : ''}`}>
+      {draftError && <div className="dx-boot-warning" role="alert">{draftError}</div>}
+      {storageError && <div className="dx-boot-warning" role="alert">{storageError}</div>}
+      {initialDrafts.notice && <div className="dx-boot-warning" role="status">{initialDrafts.notice}</div>}
       <AppBar
         title={shown.title || entry?.title || docId}
         onBack={onBack}
