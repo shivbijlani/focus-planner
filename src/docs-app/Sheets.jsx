@@ -6,7 +6,7 @@ import { excerpt, timeAgo } from './util.js'
 
 export function Sheet({ title, onClose, children, className = '', side = false }) {
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e) => { if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
