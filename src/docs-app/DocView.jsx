@@ -15,10 +15,14 @@ import { timeAgo, plannerJournalHref, excerpt } from './util.js'
 const BASE = import.meta.env?.BASE_URL || '/'
 const DISP_SHORT = { answered: 'Answered', done: 'Done', 'needs-you': 'Needs you', declined: 'Declined' }
 
-const Block = memo(function Block({ block, changed, count, notes, linkHandler, onBadge }) {
+const Block = memo(function Block({ block, changed, count, notes, linkHandler, onBadge, readOnly, current, number, onFocus }) {
   return (
     <section className={`dv-block dv-k-${block.kind}${changed ? ' is-changed' : ''}${count > 0 ? ' has-badge' : ''}`} id={`blk-${block.id}`}>
-      <div className="dv-block-body" data-block={block.id}>
+      <div className="dv-block-body" data-block={block.id}
+        tabIndex={readOnly ? undefined : current ? 0 : -1}
+        role={readOnly ? undefined : 'group'}
+        aria-label={readOnly ? undefined : `Paragraph ${number}, press C to comment`}
+        onFocus={readOnly ? undefined : onFocus}>
         <MarkdownBlocks lines={block.lines} options={{ fences: true, linkHandler }} />
       </div>
       {count > 0 && (
@@ -69,6 +73,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
   const [menuOpen, setMenuOpen] = useState(false)
   const [toast, setToast] = useState(null)
   const [sending, setSending] = useState(false)
+  const [currentBlockId, setCurrentBlockId] = useState(null)
   const articleRef = useRef(null)
   const markedReadRef = useRef(false)
   const operationsRef = useRef(null)
@@ -120,6 +125,20 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
   const shown = viewing ? viewing.parsed : data?.parsed
   const changed = useMemo(() => (viewing ? viewing.changed : baseline?.changed || new Set()), [viewing, baseline])
   const readOnly = !!viewing
+  const currentBlock = shown?.blocks.find((b) => b.id === currentBlockId) || shown?.blocks[0]
+  const onBlockFocus = useCallback((e) => setCurrentBlockId(e.currentTarget.dataset.block), [])
+  const focusBlock = (body) => {
+    if (!body) return
+    setCurrentBlockId(body.dataset.block)
+    body.focus()
+    body.scrollIntoView({ block: 'nearest' })
+  }
+  const restoreBlockFocus = () => {
+    if (readOnly) return
+    focusBlock([...articleRef.current?.querySelectorAll(BLOCK_SEL) || []]
+      .find((body) => body.dataset.block === currentBlock?.id))
+  }
+  const closeSheet = () => { setSheet(null); restoreBlockFocus() }
 
   // All comments (sent + drafts) with derived status, disposition and placement.
   const items = useMemo(() => {
@@ -245,18 +264,49 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
     return d
   }
 
-  const onPillComment = () => {
-    const a = pill?.anchor
+  const commentOn = (a) => {
     setPill(null)
     if (a) setSheet({ type: 'comment', anchor: a })
   }
-  const onPillApprove = () => {
-    const a = pill?.anchor
+  const onPillComment = () => commentOn(pill?.anchor)
+  const approve = (a) => {
     setPill(null)
     clearSelection()
     if (!a) return
     addDraft(a, 'approve', '')
     flash(`✅ Approved “${excerpt(a.quote, 40)}” — draft saved`)
+  }
+  const onPillApprove = () => approve(pill?.anchor)
+
+  const onArticleKeyDown = (e) => {
+    if (readOnly || sheet || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.nativeEvent.isComposing) return
+    if (e.target.closest?.('input,textarea,select,button,a,[contenteditable]:not([contenteditable="false"])')) return
+    const bodies = [...articleRef.current.querySelectorAll(BLOCK_SEL)]
+    const body = e.target.closest?.(BLOCK_SEL) || bodies.find((b) => b.dataset.block === currentBlock?.id)
+    if (!body) return
+    const key = e.key.toLowerCase()
+    if (!e.shiftKey && ['j', 'k', 'arrowdown', 'arrowup'].includes(key)) {
+      e.preventDefault()
+      const step = key === 'j' || key === 'arrowdown' ? 1 : -1
+      focusBlock(bodies[Math.max(0, Math.min(bodies.length - 1, bodies.indexOf(body) + step))])
+    } else if ((!e.shiftKey && ['c', 'enter', 'contextmenu'].includes(key)) || (e.shiftKey && key === 'f10')) {
+      e.preventDefault()
+      setCurrentBlockId(body.dataset.block)
+      commentOn(key === 'c' ? selectionToAnchor(articleRef.current)?.anchor || blockAnchor(body) : blockAnchor(body))
+    } else if (!e.shiftKey && key === 'a') {
+      e.preventDefault()
+      approve(blockAnchor(body))
+    }
+  }
+
+  const onViewerKeyDown = (e) => {
+    if (e.key !== 'Escape' || e.ctrlKey || e.metaKey || e.altKey || e.nativeEvent.isComposing || (!pill && !sheet)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setPill(null)
+    setSheet(null)
+    clearSelection()
+    restoreBlockFocus()
   }
 
   const saveComment = ({ intent, body }) => {
@@ -265,7 +315,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
     } else {
       addDraft(sheet.anchor, intent, body)
     }
-    setSheet(null)
+    closeSheet()
     clearSelection()
     flash('Draft added')
   }
@@ -406,7 +456,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
   const published = viewing ? revisions.find((r) => r.rev === viewing.rev)?.at : data.parsed.header?.published
 
   return (
-    <div className={`dv${wide && sheet?.type === 'comments' ? ' has-side' : ''}`}>
+    <div className={`dv${wide && sheet?.type === 'comments' ? ' has-side' : ''}`} onKeyDownCapture={onViewerKeyDown}>
       {draftError && <div className="dx-boot-warning" role="alert">{draftError}</div>}
       {storageError && <div className="dx-boot-warning" role="alert">{storageError}</div>}
       {initialDrafts.notice && <div className="dx-boot-warning" role="status">{initialDrafts.notice}</div>}
@@ -453,10 +503,13 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
         onPointerMove={cancelPress}
         onContextMenu={onContextMenu}
         onClick={onArticleClick}
+        onKeyDown={onArticleKeyDown}
+        aria-label="Document"
       >
         <h1 className="dv-title">{shown.title}</h1>
         {taskId != null && <Trio taskId={taskId} telegram={entry?.telegramUrl} current />}
-        {shown.blocks.map((b) => (
+        {!readOnly && <p className="dx-hint">Keyboard: Tab to a paragraph, J/K or arrows to move, C or Enter to comment, A to approve, Esc to close. Tab to Send to agent, then Enter or Ctrl/Command+Enter to send.</p>}
+        {shown.blocks.map((b, i) => (
           <Block
             key={`${viewing ? viewing.rev : 'cur'}-${b.id}`}
             block={b}
@@ -465,6 +518,10 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
             notes={viewing ? null : blockNotes[b.id]}
             linkHandler={linkHandler}
             onBadge={onBadge}
+            readOnly={readOnly}
+            current={currentBlock?.id === b.id}
+            number={i + 1}
+            onFocus={onBlockFocus}
           />
         ))}
         <footer className="dv-foot" ref={endRef}>
@@ -490,7 +547,12 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
       )}
 
       {drafts.length > 0 && !viewing && (!sheet || (wide && sheet.type === 'comments')) && (
-        <div className="dv-sendbar">
+        <div className="dv-sendbar" onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            doSend()
+          }
+        }}>
           <span>{drafts.length} draft{drafts.length === 1 ? '' : 's'} on this device</span>
           <button type="button" className="dx-btn dx-btn-primary" onClick={doSend} disabled={sending}>
             {sending ? 'Sending…' : `Send to agent (${drafts.length})`}
@@ -503,7 +565,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
           quote={sheet.anchor.quote}
           initial={sheet.editId ? drafts.find((d) => d.id === sheet.editId) : null}
           onSave={saveComment}
-          onCancel={() => setSheet(null)}
+          onCancel={closeSheet}
           onDelete={sheet.editId ? () => { setDrafts((ds) => ds.filter((d) => d.id !== sheet.editId)); setSheet(null) } : null}
         />
       )}

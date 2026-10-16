@@ -41,6 +41,14 @@ and publish per-comment dispositions. A `needs-you` reply is blocking. Task clos
 pauses, lanes, ownership, attribution and consent still apply; approving a span is not
 whole-document approval. Google documents and Markdown briefings are not migrated.
 
+In the current Docs revision, Tab into the article to focus its first (or last-current)
+paragraph. Use J/K or Up/Down to move between paragraphs, C or Enter to comment,
+A to approve, and Escape to dismiss a comment sheet or selection pill and return to
+the current paragraph. Shift+F10 and the ContextMenu key also open a block comment;
+C comments on selected article text when a selection exists. Shortcuts do not run
+in editable fields or historical revisions. Tab to **Send to agent**, then press Enter
+or Ctrl+Enter (Command+Enter on Mac) to submit saved drafts.
+
 For installed plugins, configure `FOCUS_PLANNER_REPO` to the matching deployed repository
 and `PLANNER_PATH` to the planner data folder for `fp-docs`. Run
 `node scripts\fp-docs.js --help` from that repository. This consumer launcher enforces
