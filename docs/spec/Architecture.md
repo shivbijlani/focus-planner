@@ -38,6 +38,9 @@ than importing concrete provider implementations.
 | `mcp-cred-vault` | `packages/mcp-cred-vault/src/schema.js` | Validates the non-secret pointer file that tells a machine which credentials to pull from its OS vault. |
 | `install-prompt` | `packages/install-prompt/src/useInstallPrompt.js`, `packages/install-prompt/src/InstallModal.jsx` | Cross-platform "add to home screen" PWA install UX. |
 | `diagnostics` | `packages/diagnostics/src/index.js` | A shared, low-overhead event/tracing sink used by the app, its service worker, and folder-sync, so a live worker's state can be dumped on demand. |
+| `docs-core` | `packages/docs-core/src/doc.js`, `packages/docs-core/src/anchor.js`, `packages/docs-core/src/review.js`, `packages/docs-core/src/validate.js` | The pure format library for native catch-up Docs, shared by the Docs app and the publisher. See [Domain-docs-core](Domain-docs-core). |
+| `docs-publisher` | `packages/docs-publisher/src/publisher.js`, `packages/docs-publisher/bin/fp-docs.js` | The only sanctioned writer of published Docs: validate, anchor, snapshot, atomic commit. See [Domain-docs-publisher](Domain-docs-publisher). |
+| `planner-shared-core` | `packages/planner-shared-core/src/taskSort.js`, `packages/planner-shared-core/src/taskMove.js` | Pure priority sorting and move planning, consumed by the app and meant for a second deployment. See [Domain-planner-shared-core](Domain-planner-shared-core). |
 | `scripts` | `scripts/spec/collect.mjs`, `scripts/spec/verify.mjs`, `scripts/merge-queue.mjs` | Repo-maintenance tooling: this spec's own generation pipeline, dependency-hygiene guards, and merge-queue automation. See [Domain-scripts](Domain-scripts). |
 | `root` | `server.js`, `vite.config.js`, `eslint.config.js` | The dev/build toolchain and the one real backend process (below). |
 

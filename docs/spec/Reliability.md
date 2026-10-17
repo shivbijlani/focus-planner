@@ -467,7 +467,16 @@ a CI job runs the sweep on every push so a bad transport value cannot land unnot
 
 ## The mutation-tested sweep harness
 
-The repo carries many narrow checks because each one exists to catch one named silent-failure shape,
+The preventive-restart supervisor has its own executable specification: `plugins/overnight-agent/checks/reliability-supervisor.tests.mjs` (about 1,900 lines, run with Node's built-in test runner against `reliability-supervisor.mjs`). Its tests state the restart contract as rules a rebuild must keep:
+
+- **Activity is three-valued.** Human, tool, background, startup and *unknown* activity are never read as idle; unknown activity and a pending user interaction postpone a restart instead of permitting one. A zero-session box needs a continuously observed quiet window.
+- **A restart attempt is written down before the shutdown action**, so a supervisor crash is recovered without a duplicate action and the cooldown survives. The cooldown counts durable restart intents only, never postponements.
+- **One owner at a time.** Concurrent expired-lock reclamation elects exactly one owner; an orphaned reclamation claim expires; losing ownership stops the critical action; new work racing the quiet check aborts under the action lock.
+- **Graceful before forced.** A force fallback runs only after the graceful timeout and a quiet revalidation, and re-checks its protections immediately before terminating the process tree. A hard deadline protects unknown, changed or closed targets, and concurrent hard deadlines share exactly one restart transaction.
+- **Honest outcomes.** A command timeout reports an unknown outcome, never "nothing was terminated"; a failed restart keeps its original cycle anchor and cooldown; relaunch failure is bounded by a startup attempt budget.
+- **The decision core cannot kill anything.** A test asserts the core contains no process-termination actuator; actuation lives in a separate adapter, so policy can be tested without side effects.
+
+The repository also carries many narrow checks because each one exists to catch one named silent-failure shape,
 not to contribute to a generic coverage number. The working tree currently contains 166 `.mjs`
 checks under `plugins/overnight-agent/checks/`, and the mutchecks explain why that count is high.
 
