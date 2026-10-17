@@ -140,7 +140,7 @@ a { color: var(--dx-accent); }
 .dv-block.is-changed { border-left-color: var(--dx-change); background: linear-gradient(90deg, rgba(249,171,0,.07), transparent 60%); }
 .dv-block.is-flash { background: #fff3c4; }
 .dv-block-body { min-width: 0; }
-.dv-block-body:focus-visible { outline: 3px solid var(--dx-accent, #1a73e8); outline-offset: 4px; border-radius: 3px; }
+.dv-block-body:focus-visible, .dx-trio-link:focus-visible { outline: 3px solid var(--dx-accent, #1a73e8); outline-offset: 4px; border-radius: 3px; }
 .dv-block-body .jc-p { margin: 0 0 12px; }
 .dv-block-body .jc-subhead { font-size: 21px; font-weight: 700; margin: 22px 0 8px; line-height: 1.3; }
 .dv-k-heading + .dv-k-heading .jc-subhead { margin-top: 8px; }
@@ -207,8 +207,11 @@ mark.hl-docs-focus { background: var(--dx-hl-focus); color: inherit; }
   position: fixed; right: 16px; bottom: calc(84px + var(--dx-safe-bottom)); z-index: 30; border: 0; border-radius: 22px;
   height: 44px; padding: 0 16px; background: #fff; box-shadow: 0 3px 12px rgba(0,0,0,.2); font-weight: 600; font-size: 14px; color: #7a4f00; cursor: pointer;
 }
+/* In-flow and sticky (not viewport-fixed): it follows the doc in Tab order and stays inside
+   the Docs pane, so an embedding host's sidebar/footer is never covered. */
+.dv.has-sendbar { padding-bottom: 0; }
 .dv-sendbar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; align-items: center; gap: 12px; justify-content: space-between;
+  position: sticky; bottom: 0; margin-top: 40px; z-index: 40; display: flex; align-items: center; gap: 12px; justify-content: space-between;
   padding: 10px 16px calc(10px + var(--dx-safe-bottom)); background: rgba(255,255,255,.96); border-top: 1px solid var(--dx-line);
   backdrop-filter: blur(8px); font-size: 14px; color: var(--dx-ink-2);
 }
@@ -238,7 +241,9 @@ mark.hl-docs-focus { background: var(--dx-hl-focus); color: inherit; }
 .dx-sheet-head { display: flex; align-items: center; padding: 4px 8px 4px 20px; }
 .dx-sheet-head h2 { flex: 1; font-size: 18px; margin: 0; }
 .dx-sheet-body { overflow-y: auto; padding: 0 20px 16px; -webkit-overflow-scrolling: touch; }
-@keyframes dx-up { from { transform: translateY(30%); opacity: .4; } }
+/* Slide only: fading the sheet itself made it look translucent on first open. */
+@keyframes dx-up { from { transform: translateY(30%); } }
+@media (prefers-reduced-motion: reduce) { .dx-sheet, .dx-scrim, .dx-pill-bar { animation: none; } }
 @keyframes dx-fade { from { opacity: 0; } }
 .dx-side { pointer-events: none; }
 .dx-side .dx-scrim { display: none; }
