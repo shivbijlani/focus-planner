@@ -3,9 +3,9 @@
   "version": "0.0.1",
   "description": "Shared, host-agnostic domain logic for the Focus Planner family of apps. Pilot package proving cross-repo package consumption (see focus-planner#650).",
   "type": "module",
-  "main": "src/taskSort.js",
+  "main": "src/index.js",
   "exports": {
-    ".": "./src/taskSort.js"
+    ".": "./src/index.js"
   },
   "files": [
     "src"
