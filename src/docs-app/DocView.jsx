@@ -456,7 +456,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
   const published = viewing ? revisions.find((r) => r.rev === viewing.rev)?.at : data.parsed.header?.published
 
   return (
-    <div className={`dv${wide && sheet?.type === 'comments' ? ' has-side' : ''}`} onKeyDownCapture={onViewerKeyDown}>
+    <div className={`dv${wide && sheet?.type === 'comments' ? ' has-side' : ''}${drafts.length > 0 && !viewing ? ' has-sendbar' : ''}`} onKeyDownCapture={onViewerKeyDown}>
       {draftError && <div className="dx-boot-warning" role="alert">{draftError}</div>}
       {storageError && <div className="dx-boot-warning" role="alert">{storageError}</div>}
       {initialDrafts.notice && <div className="dx-boot-warning" role="status">{initialDrafts.notice}</div>}
@@ -538,14 +538,6 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
         </footer>
       </article>
 
-      {!viewing && changedList.length > 1 && !sheet && (
-        <button type="button" className="dv-fab" onClick={nextChange} aria-label="Next change">↓ Next change</button>
-      )}
-
-      {pill && !sheet && (
-        <SelectionPill rect={pill.rect} mode={pill.mode} onComment={onPillComment} onApprove={onPillApprove} onDismiss={() => setPill(null)} />
-      )}
-
       {drafts.length > 0 && !viewing && (!sheet || (wide && sheet.type === 'comments')) && (
         <div className="dv-sendbar" onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -558,6 +550,14 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
             {sending ? 'Sending…' : `Send to agent (${drafts.length})`}
           </button>
         </div>
+      )}
+
+      {!viewing && changedList.length > 1 && !sheet && (
+        <button type="button" className="dv-fab" onClick={nextChange} aria-label="Next change">↓ Next change</button>
+      )}
+
+      {pill && !sheet && (
+        <SelectionPill rect={pill.rect} mode={pill.mode} onComment={onPillComment} onApprove={onPillApprove} onDismiss={() => setPill(null)} />
       )}
 
       {sheet?.type === 'comment' && (

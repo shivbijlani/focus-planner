@@ -139,3 +139,59 @@ test('synchronous managed boot failure renders an alert and never exposes the ol
   await expect(page.getByRole('alert')).toContainText('Managed host boot refused')
   await expect(page.locator('.dv-title')).toHaveCount(0)
 })
+
+test('forward Tab reaches Send to agent after the doc content and task chips', async ({ page }) => {
+  await page.goto('/e2e/fixtures/docs-host.html')
+  await expect(page.locator('.dv-title')).toHaveText(SAMPLE_TITLE)
+  await page.locator('[data-block]').first().focus()
+  await page.keyboard.press('a')
+  const send = page.getByRole('button', { name: /Send to agent/ })
+  await expect(send).toBeVisible()
+  const lastChip = page.locator('.dv-foot a.dx-trio-link').last()
+  await lastChip.focus()
+  await page.keyboard.press('Tab')
+  await expect(send).toBeFocused()
+})
+
+test('task chips show the same keyboard focus ring as blocks', async ({ page }) => {
+  await page.goto('/e2e/fixtures/docs-host.html')
+  await expect(page.locator('.dv-title')).toHaveText(SAMPLE_TITLE)
+  const chip = page.locator('.dv-page > .dx-trio a.dx-trio-link').first()
+  await tabTo(page, chip)
+  const ring = (el) => { const s = getComputedStyle(el); return { style: s.outlineStyle, width: s.outlineWidth, color: s.outlineColor } }
+  const chipRing = await chip.evaluate(ring)
+  expect(chipRing.style).toBe('solid')
+  expect(chipRing.width).toBe('3px')
+  const block = page.locator('[data-block]').first()
+  await tabTo(page, block)
+  expect(await block.evaluate(ring)).toEqual(chipRing)
+})
+
+test('send bar stays in the Docs pane and never covers the host sidebar footer', async ({ page }) => {
+  await page.goto('/e2e/fixtures/docs-host-sidebar.html')
+  await expect(page.locator('.dv-title')).toHaveText(SAMPLE_TITLE)
+  await page.locator('[data-block]').first().focus()
+  await page.keyboard.press('a')
+  const bar = page.locator('.dv-sendbar')
+  await expect(bar).toBeVisible()
+  const pane = await page.locator('#root').boundingBox()
+  const barBox = await bar.boundingBox()
+  expect(barBox.x).toBeGreaterThanOrEqual(pane.x)
+  expect(barBox.y + barBox.height).toBeLessThanOrEqual(pane.y + pane.height + 1)
+  for (const id of ['host-tour', 'host-settings']) {
+    const box = await page.locator(`#${id}`).boundingBox()
+    const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.id, [box.x + box.width / 2, box.y + box.height / 2])
+    expect(hit).toBe(id)
+    await page.locator(`#${id}`).click({ trial: true })
+  }
+  await expect(bar).toBeInViewport()
+})
+
+test('comment sheet is fully opaque from its first frame', async ({ page }) => {
+  await page.goto('/e2e/fixtures/docs-host.html')
+  await expect(page.locator('.dv-title')).toHaveText(SAMPLE_TITLE)
+  await page.locator('[data-block]').first().focus()
+  await page.keyboard.press('c')
+  const opacity = await page.locator('.dx-sheet').evaluate((el) => getComputedStyle(el).opacity)
+  expect(opacity).toBe('1')
+})

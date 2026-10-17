@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"><title>Isolated Docs host fixture with sidebar</title>
+    <style>
+      body { margin: 0; display: grid; grid-template-columns: 240px 1fr; height: 100vh; overflow: hidden; }
+      #host-sidebar { display: flex; flex-direction: column; background: #202124; color: #fff; }
+      #host-sidebar nav { flex: 1; padding: 12px; }
+      #host-sidebar footer { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-top: 1px solid #444; }
+      #root { height: 100vh; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <aside id="host-sidebar">
+      <nav>Synthetic host navigation</nav>
+      <footer><button id="host-tour" type="button">Take a tour</button><button id="host-settings" type="button">Settings / sync</button></footer>
+    </aside>
+    <div id="root"></div>
+    <script type="module" src="./docs-host.jsx"></script>
+  </body>
+</html>
