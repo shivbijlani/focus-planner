@@ -72,11 +72,36 @@ export const TOOL_DEFINITIONS = [
     } },
     annotations: { ...mutation, destructiveHint: true },
   },
+  {
+    name: 'docs_read',
+    description: 'READ ONLY. The task\'s Docs catch-up document set (primary plus linked supporting docs such as a resume draft): each doc\'s id, rev, url, editable draft Markdown and block ids, and every open user comment (quote, intent, body, block). Use it when the user says they commented on a doc.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['taskId'], properties: { taskId, includeDrafts: { type: 'boolean', description: 'Default true; false returns only status and comments.' } } },
+    annotations: readOnly,
+  },
+  {
+    name: 'docs_publish',
+    description: 'Publish the next revision of a task\'s Docs document set (or create the first one) through the sanctioned Docs publisher, answering the user\'s comments. Pass the full revised Markdown (not a diff) for each doc you change: draft for the primary (omit to keep it unchanged) and linked[] for supporting docs ({id, baseRev, draft} to update, {alias, draft} to create, referenced from the primary as doc:new:<alias>). Every open comment needs a disposition {doc?, id, status: answered|done|declined|needs-you, blocks: ["@N" ordinal of the block in your draft, or "bN"], note?}; put the actual answer in the doc text. With author set, a short journal pointer to the new revision is added too. Only already_applied means published.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['taskId', 'summary', 'operationId'], properties: {
+      taskId,
+      summary: { type: 'string', minLength: 1, maxLength: 500, description: 'One line: what changed in this revision.' },
+      baseRev: { type: 'integer', minimum: 1, description: 'Primary rev from docs_read; required once a doc exists.' },
+      draft: { type: 'string', maxLength: 262144, description: 'Full primary Markdown: "# Title", a bold status sentence, then the catch-up sections. Omit to keep the current primary text.' },
+      linked: { type: 'array', maxItems: 20, items: { type: 'object', additionalProperties: false, properties: {
+        id: { type: 'string', pattern: '^d-[a-z0-9]{6,}$' }, baseRev: { type: 'integer', minimum: 1 }, alias: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,31}$' }, draft: { type: 'string', maxLength: 262144 },
+      } } },
+      dispositions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'status', 'blocks'], properties: {
+        doc: { type: 'string' }, id: { type: 'string' }, status: { type: 'string', enum: ['answered', 'done', 'declined', 'needs-you'] }, blocks: { type: 'array', minItems: 1, items: { type: 'string' } }, note: { type: 'string', maxLength: 500 },
+      } } },
+      partial: { type: 'boolean' }, reason: { type: 'string', maxLength: 500 }, force: { type: 'boolean', description: 'Allow a first doc for a short journal.' },
+      author, timeZone, operationId,
+    } },
+    annotations: mutation,
+  },
 ]
 
 export const BROKER_TOOL = {
   name: 'planner_plan',
-  description: 'Tokenless Focus Planner transport. Performs no HTTP and takes no credentials. Call with tool (find_tasks, get_task, add_task, set_priority, move_task, append_journal, set_todo, complete_task), its arguments, and the content/id/etag snapshots you already fetched. Follow read_required by fetching the listed Graph files; follow write_required by executing the conditional PUTs in order through the secure Graph broker, then discard snapshots, re-read and call again. Only "already_applied" means a change is saved; never report write_required as done. Start every request with find_tasks.',
+  description: 'Tokenless Focus Planner transport. Performs no HTTP and takes no credentials. Call with tool (find_tasks, get_task, add_task, set_priority, move_task, append_journal, set_todo, complete_task, docs_read, docs_publish), its arguments, and the content/id/etag snapshots you already fetched. Follow read_required by fetching the listed Graph files (it can ask more than once as it discovers files); follow write_required by executing the conditional PUTs in order through the secure Graph broker, then discard snapshots, re-read and call again. Only "already_applied" means a change is saved; never report write_required as done. Start every request with find_tasks.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['tool', 'arguments'],
     properties: {

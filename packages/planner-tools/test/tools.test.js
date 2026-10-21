@@ -278,7 +278,7 @@ describe('broker transport', () => {
 
 describe('CLI', () => {
   it('prints its version and runs plan from stdin', () => {
-    expect(spawnSync(process.execPath, [BIN, '--version'], { encoding: 'utf8' }).stdout.trim()).toBe('1.0.0')
+    expect(spawnSync(process.execPath, [BIN, '--version'], { encoding: 'utf8' }).stdout.trim()).toBe('1.1.0')
     const out = spawnSync(process.execPath, [BIN, 'plan'], {
       encoding: 'utf8',
       input: JSON.stringify({ tool: 'find_tasks', arguments: { query: 'pack' }, snapshots: { 'planner.md': { content: BOARD, id: 'a', etag: 'b' } } }),

@@ -1,4 +1,4 @@
-# Focus Planner agent tools 1.0.0
+# Focus Planner agent tools 1.1.0
 
 Lets an agent (Muse, a Copilot chat, any process that can run Node 22+) update
 Shiv's Focus Planner without driving the web UI: find tasks, add tasks, set
@@ -15,8 +15,9 @@ complete tasks. No hosted service and no npm dependencies.
   folder. On a conflict the change is re-applied to fresh content, never by
   resending an old body, so concurrent app edits survive.
 - **Guardrails are unreachable.** Only `planner.md`, its `planner.md.sync.json`
-  sidecar, `planner-completed.md`, `journal/task-<id>.md` (and read-only
-  `task-settings.json` plus the journal listing) are allowed. `agent-gate.md`,
+  sidecar, `planner-completed.md`, `journal/task-<id>.md`, publisher-owned Docs
+  files under `docs/` (and read-only `task-settings.json`, Docs `review.json` and
+  the journal listing) are allowed. `agent-gate.md`,
   `user-settings.md`, `AGENTS.md`, settings and any other file are refused for
   every read and write, including by the direct Graph client.
 - **Agents never speak as the user.** Journal notes carry `<!-- from: <agent> -->`;
@@ -25,18 +26,18 @@ complete tasks. No hosted service and no npm dependencies.
 
 ## Install a pinned release
 
-Release: https://github.com/shivbijlani/focus-planner/releases/tag/planner-tools-v1.0.0
+Release: https://github.com/shivbijlani/focus-planner/releases/tag/planner-tools-v1.1.0
 
 ```bash
-base=https://github.com/shivbijlani/focus-planner/releases/download/planner-tools-v1.0.0
-curl -fsSLO $base/planner-tools-1.0.0.tgz
-curl -fsSLO $base/planner-tools-1.0.0.tgz.sha256
-sha256sum -c planner-tools-1.0.0.tgz.sha256      # must print OK before extracting
-tar -xzf planner-tools-1.0.0.tgz
-node package/packages/planner-tools/bin/planner.js --version   # 1.0.0
+base=https://github.com/shivbijlani/focus-planner/releases/download/planner-tools-v1.1.0
+curl -fsSLO $base/planner-tools-1.1.0.tgz
+curl -fsSLO $base/planner-tools-1.1.0.tgz.sha256
+sha256sum -c planner-tools-1.1.0.tgz.sha256      # must print OK before extracting
+tar -xzf planner-tools-1.1.0.tgz
+node package/packages/planner-tools/bin/planner.js --version   # 1.1.0
 ```
 
-Windows: `Get-FileHash planner-tools-1.0.0.tgz -Algorithm SHA256` must equal the
+Windows: `Get-FileHash planner-tools-1.1.0.tgz -Algorithm SHA256` must equal the
 first word of the `.sha256` file. Do not use an unpinned `npx`.
 
 ## Tokenless broker transport (Muse)
@@ -81,6 +82,43 @@ avoid duplicates. Use one `operationId` per intended change (16-120 of
 | `append_journal` | `taskId`, `text`, `author`, `operationId`, `timeZone` | agent bubble; creates the journal if missing; a hidden `planner-op` marker makes retries exact |
 | `set_todo` | `taskId`, `todoIndex`, `todoText`, `done`, `operationId` | index + exact text from `get_task` |
 | `complete_task` | `taskId`, `outcome?`, `comment?`, `author?`, `operationId`, `timeZone` | archives, removes, re-parents children; confirm with the user first |
+| `docs_read` | `taskId`, `includeDrafts?` | read only; the task's Docs set (primary + linked drafts) with editable Markdown, block ids and open comments |
+| `docs_publish` | `taskId`, `summary`, `baseRev`, `draft?`, `linked?`, `dispositions?`, `author?`, `timeZone?`, `operationId` | next Docs revision through the sanctioned publisher; one disposition per open comment |
+
+## Docs draft review loop
+
+For drafts the user should comment on (resumes, PARs, proposals), publish them
+as a native Docs set instead of emailing them: a primary catch-up doc for the
+task that links a supporting doc holding the draft itself.
+
+1. **First draft:** `docs_publish` with `draft` (the catch-up: `# Title`, a
+   bold status sentence, then the sections *What this is, with no prior
+   context*, *Why it matters*, *What changed / what was done*, *Evidence*,
+   *Where it stands*), `linked: [{"alias": "draft", "draft": "# ..."}]`
+   referenced from the primary as `doc:new:draft`, and `force: true` when the
+   journal is short. Send the user the returned `url`.
+2. **The user comments** in the Docs app (phone or desktop) and presses Send,
+   then tells the agent ("I made comments on 356").
+3. **Next draft:** `docs_read` returns each doc's current Markdown, `rev` and
+   the open comments (quoted text, intent, body). Rewrite the full draft,
+   answer questions in the doc itself, then `docs_publish` with `baseRev` (the
+   primary rev), `linked: [{"id", "baseRev", "draft"}]` for each changed
+   supporting doc, and a disposition per comment, e.g.
+   `{"doc": "d-…", "id": "c_…", "status": "done", "blocks": ["@3"]}` where `@3`
+   is the third block of the new draft. `needs-you` asks the user back. Pass
+   `author` and `timeZone` to leave a one-line journal pointer.
+4. Only `already_applied` means published; then tell the user the revision is
+   ready at `url`.
+
+The publisher refuses (code `DOCS_REFUSED`, with the `D0x` reason) drafts with
+raw HTML, a stale `baseRev`, or unanswered comments. It is the unchanged
+`packages/docs-publisher` code running against the fetched snapshots; it never
+writes the user's `review.json`. Publishing claims the submitted reviews (the
+Docs app shows "Working"). A retried `operationId` is recognised from the
+revision it created. An interrupted multi-file publish is rolled back (body
+only) or forward (body and response) on the next call. History snapshots are
+not trimmed over Graph; `fp-docs` trims them to the newest 20. Configuration
+files stay unreadable, so the first-doc threshold is the 1,500-word default.
 
 `complete_task` touches several files in a safe order: archive row, journal
 close-out, a sync tombstone in `planner.md.sync.json`, then the board. Each step
