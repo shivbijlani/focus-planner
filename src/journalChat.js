@@ -308,3 +308,80 @@ export function formatCloseOutComment(outcome, comment) {
   if (cleanComment) parts.push(cleanComment)
   return parts.join('\n\n')
 }
+
+// --- Journal todos shared by the UI and the planner agent tools (#836) ------------------
+
+// The todo extractor behind the task list's todo rows and the completed-board summary.
+// Moved here from storage/fsa.js (which re-exports it) so Node tools can import it
+// without the browser storage layer.
+export function parseTodos(content) {
+  const normalized = content.replace(/^\uFEFF/, '')
+  const lines = normalized.split(/\r?\n/)
+  const todos = []
+  for (const line of lines) {
+    const checkboxMatch = line.match(/^-\s*\[([ x])\]\s*(.+)/i)
+    if (checkboxMatch) {
+      todos.push({ done: checkboxMatch[1].toLowerCase() === 'x', text: checkboxMatch[2].trim() })
+      continue
+    }
+    const todoMatch = line.match(/^-\s*TODO:\s*(.+)/i)
+    if (todoMatch) {
+      todos.push({ done: false, text: todoMatch[1].trim() })
+      continue
+    }
+    const doneMatch = line.match(/^-\s*DONE:\s*(.+)/i)
+    if (doneMatch) {
+      todos.push({ done: true, text: doneMatch[1].trim() })
+    }
+  }
+  return todos
+}
+
+const TOGGLE_CHECKBOX_RE = /^(?:[-*+]|\d+[.)])\s*\[([ xX])\]\s*(.+)/
+const TOGGLE_TODO_RE = /^-\s*TODO:\s*(.+)/i
+const TOGGLE_DONE_RE = /^-\s*DONE:\s*(.+)/i
+
+/**
+ * The journal's toggleable items in file order: checkboxes and `TODO:`/`DONE:` lines,
+ * excluding quoted (`>`) lines. `index` is the same index the chat view's checkbox
+ * clicks use, so an agent and a click address the same item.
+ */
+export function listToggleableTodos(content) {
+  const lines = (content || '').split(/\r?\n/)
+  const items = []
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim()
+    if (/^>/.test(t)) continue
+    let m
+    if ((m = t.match(TOGGLE_CHECKBOX_RE))) items.push({ lineIndex: i, text: m[2].trim(), done: m[1] !== ' ' })
+    else if ((m = t.match(TOGGLE_TODO_RE))) items.push({ lineIndex: i, text: m[1].trim(), done: false })
+    else if ((m = t.match(TOGGLE_DONE_RE))) items.push({ lineIndex: i, text: m[1].trim(), done: true })
+  }
+  return items.map((item, index) => ({ index, ...item }))
+}
+
+/** Flip the `index`th toggleable item. Returns null when there is no such item. */
+export function toggleTodoAt(content, index) {
+  const item = listToggleableTodos(content)[index]
+  if (!item) return null
+  const lines = content.split(/\r?\n/)
+  const raw = lines[item.lineIndex]
+  const t = raw.trim()
+  if (TOGGLE_CHECKBOX_RE.test(t)) lines[item.lineIndex] = raw.replace(/\[([ xX])\]/, (_, c) => (c === ' ' ? '[x]' : '[ ]'))
+  else if (TOGGLE_TODO_RE.test(t)) lines[item.lineIndex] = raw.replace(/(-\s*)TODO(\s*:)/i, '$1DONE$2')
+  else lines[item.lineIndex] = raw.replace(/(-\s*)DONE(\s*:)/i, '$1TODO$2')
+  return lines.join('\n')
+}
+
+/** Set the `index`th toggleable item to `done`; unchanged content when it already is. */
+export function setTodoDone(content, index, done) {
+  const item = listToggleableTodos(content)[index]
+  if (!item) return null
+  return item.done === Boolean(done) ? content : toggleTodoAt(content, index)
+}
+
+/** The starting Markdown of a new task journal, as the board's "Create journal" writes it. */
+export function buildNewJournal(taskId, taskName, { todoStub = true } = {}) {
+  const cleanTaskName = String(taskName || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
+  return `# Task ${taskId}: ${cleanTaskName}\n\n${todoStub ? '- TODO: \n' : ''}`
+}
