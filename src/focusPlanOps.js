@@ -14,6 +14,7 @@ import {
   alignRowToHeaders,
   formatRow,
   isTableSeparatorCells,
+  normalizeRowCells,
   rowCells,
 } from './boardRow.js'
 import { isPrioritiesSection } from './focusPlanShared.js'
@@ -360,6 +361,29 @@ export function opMoveLinesBetweenSections(content, rawLines, fromSection, toSec
     .filter(v => v !== undefined)
     .map(line => transformRowForSection(line, fromTable.headers, toTable.headers))
   lines.splice(toSectionInsertIndex, 0, ...orderedRemoved)
+  return lines.join('\n')
+}
+
+/**
+ * Set a row's priority icon in its `🎯` cell (#836).
+ *
+ * Header-addressed rather than `rawLine.replace(oldPriority, ...)`: the kebab
+ * "Change priority" menu passed the row's ID cell as the old value, so a plain
+ * string replace could rewrite the task ID instead of the icon. Only the target
+ * cell's text changes; every other byte of the row is preserved.
+ */
+export function opSetTaskPriority(content, rawLine, newPriority) {
+  const { lines, lineIndex, section } = findTaskRow(content, rawLine)
+  if (lineIndex === -1) return content
+  const table = findSectionTable(lines, section)
+  let index = table.headers.indexOf('🎯')
+  if (index === -1) index = 1
+  const parts = lines[lineIndex].split('|')
+  // parts[0] is the text before the leading pipe, so cell i lives at parts[i + 1].
+  if (parts.length < index + 3) return content
+  if (parts[index + 1].trim() === newPriority) return content
+  parts[index + 1] = ` ${newPriority} `
+  lines[lineIndex] = parts.join('|')
   return lines.join('\n')
 }
 
@@ -833,20 +857,38 @@ export function opPromoteToManagerPriority(content, taskId) {
  */
 export function opBridgeLinks(content, removedId, nextIdRawValue) {
   const lines = content.split('\n')
+  // #836: locate `Linked ID` by each table's header. The old fixed `parts[6]`
+  // is the Wake cell on a 7-column Deferred row, so Deferred children of a
+  // removed task were silently left pointing at it (the #426 bug class).
+  let headers = null
   const newLines = lines.map(line => {
-    if (!line.trim().startsWith('|')) return line
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('|')) {
+      if (line.startsWith('## ')) headers = null
+      return line
+    }
+    const cells = rowCells(trimmed)
+    if (isTableSeparatorCells(cells)) return line
+    if (cells[0] === 'ID' || cells[0] === '#') {
+      headers = cells
+      return line
+    }
     const parts = line.split('|')
-    if (parts.length < 7) return line
-
-    // Skip header and separator
-    if (parts[1].trim() === 'ID' || parts[1].trim().startsWith('---')) return line
-
-    const currentLinkedId = parts[6].trim()
-    if (currentLinkedId === String(removedId)) {
+    const linkedIndex = headers ? headers.findIndex(h => h.includes('Linked')) : -1
+    if (linkedIndex === -1) {
+      if (parts.length < 7) return line
+      if (parts[6].trim() !== String(removedId)) return line
       parts[6] = ` ${nextIdRawValue || ''} `
       return parts.join('|')
     }
-    return line
+    const aligned = normalizeRowCells(cells, headers)
+    if ((aligned[linkedIndex] ?? '').trim() !== String(removedId)) return line
+    if (cells.length === headers.length) {
+      parts[linkedIndex + 1] = ` ${nextIdRawValue || ''} `
+      return parts.join('|')
+    }
+    aligned[linkedIndex] = nextIdRawValue || ''
+    return line.slice(0, line.indexOf('|')) + formatRow(aligned) + line.slice(line.lastIndexOf('|') + 1)
   })
   return newLines.join('\n')
 }
@@ -970,4 +1012,90 @@ export function opAppendToCompleted(completedContent, completedRow, { taskId = '
     lines.splice(insertIndex, 0, completedRow)
   }
   return lines.join('\n')
+}
+
+// ── Task lookup and completion composed for every writer (#836) ─────────────
+//
+// The planner agent tools address tasks by stable ID, while the UI hands these
+// ops the row it rendered. Both resolve to the same `rawLine` and then call the
+// same row operations above, so an agent edit and a click produce identical
+// Markdown.
+
+export const ACTIVE_SECTIONS = ['Today', 'Deferred']
+export const PRIORITY_ICONS = ['🔴', '🟡', '🔵', '⚪', '🐸', '📖']
+
+/** The numeric task ID at the start of an ID cell (`70,[123](url)` -> `70`), or null. */
+export function taskIdFromCell(cell) {
+  const m = String(cell ?? '').trim().match(/^(\d+)/)
+  return m ? m[1] : null
+}
+
+/**
+ * Every task row in the given sections, header-aligned with the canonical
+ * `normalizeRowCells` rule so ragged rows read the same way the board shows them.
+ */
+export function listBoardTasks(content, sections = ACTIVE_SECTIONS) {
+  const lines = String(content ?? '').split('\n')
+  const tasks = []
+  for (const section of sections) {
+    const table = findSectionTable(lines, section)
+    if (table.headerIndex === -1) continue
+    const { headers } = table
+    const col = (name, fallback = -1) => {
+      const i = headers.findIndex(h => h === name)
+      return i === -1 ? fallback : i
+    }
+    const priorityIndex = col('🎯', 1)
+    const taskIndex = col('Task', 2)
+    const addedIndex = col('Added')
+    const wakeIndex = col('Wake')
+    const linkedIndex = headers.findIndex(h => h.includes('Linked'))
+    const workIndex = headers.findIndex(h => h.includes('Priority') && h !== '🎯')
+    for (let i = table.headerIndex + 1; i < table.endIndex; i++) {
+      const trimmed = lines[i].trim()
+      if (!trimmed.startsWith('|')) continue
+      const raw = rowCells(trimmed)
+      if (!isDataRowCells(raw)) continue
+      const id = taskIdFromCell(raw[0])
+      if (!id) continue
+      const cells = normalizeRowCells(raw, headers)
+      const at = (index) => (index === -1 ? '' : (cells[index] ?? ''))
+      tasks.push({
+        id,
+        section,
+        rawLine: trimmed,
+        idCell: raw[0],
+        priority: at(priorityIndex),
+        title: at(taskIndex),
+        workPriority: at(workIndex),
+        added: at(addedIndex),
+        wake: at(wakeIndex),
+        linkedId: at(linkedIndex),
+      })
+    }
+  }
+  return tasks
+}
+
+/** All active rows carrying `taskId` (more than one means the board needs repair). */
+export function findTasksById(content, taskId, sections = ACTIVE_SECTIONS) {
+  const id = String(taskId ?? '').trim()
+  return listBoardTasks(content, sections).filter(t => t.id === id)
+}
+
+/**
+ * Move one task to the completed board: remove its row, then append its archive
+ * row under this week's heading. Shared by the UI's "Mark as done" and the
+ * agent tools so both write identical rows. Re-applying is safe: the archive
+ * append skips a task ID that is already archived.
+ */
+export function opCompleteTask(boardContent, completedContent, { rawLine, fromSection, taskId, taskName, priority, todoItems = [], outcome = '' }) {
+  const removal = opRemoveTaskFromFocusPlanResult(boardContent, rawLine, fromSection)
+  const completedRow = buildCompletedRow({ taskId, taskName, priority, todoItems, outcome })
+  return {
+    board: removal.content,
+    removed: removal.removed,
+    completed: opAppendToCompleted(completedContent, completedRow, { taskId }),
+    completedRow,
+  }
 }

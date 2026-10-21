@@ -71,4 +71,17 @@ export default defineConfig([
       'no-control-regex': 'off',
     },
   },
+  {
+    // Node-side planner agent tools (#836): CLI, MCP and release packer.
+    files: ['packages/planner-tools/**/*.{js,mjs}'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+    rules: {
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

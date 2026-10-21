@@ -62,7 +62,7 @@ import { PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import profile from '#planner/deployment-profile'
 import { linkedNavFallbackFile } from './linkedNav.js'
 import { clampMenuPosition, menuMaxHeight } from './menuPosition.js'
-import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment, insertTodoLine, stripEmptyTodoLines } from './journalChat.js'
+import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment, insertTodoLine, stripEmptyTodoLines, toggleTodoAt, buildNewJournal } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
 import {
@@ -2866,48 +2866,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
   }
 
   const handleTaskAction = async (action, rawLine, fromSection, toSection) => {
-    // Move task from one section to another
-    const lines = content.split('\n')
-    let inFromSection = false
-    let inToSection = false
-    let toSectionInsertIndex = -1
-    let lineToRemoveIndex = -1
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-
-      if (line.startsWith('## ')) {
-        const sectionName = line.replace('## ', '').trim()
-        inFromSection = sectionName === fromSection
-        inToSection = sectionName === toSection
-      }
-
-      // Find where to insert in target section (after header row and separator)
-      if (inToSection && line.trim().startsWith('|') && line.includes('---')) {
-        toSectionInsertIndex = i + 1
-      }
-
-      // Find the line to remove
-      if (inFromSection && line.trim() === rawLine) {
-        lineToRemoveIndex = i
-      }
-    }
-
-    if (lineToRemoveIndex !== -1 && toSectionInsertIndex !== -1) {
-      // Remove from source
-      const removedLine = lines.splice(lineToRemoveIndex, 1)[0]
-
-      // Adjust insert index if removal was before it
-      if (lineToRemoveIndex < toSectionInsertIndex) {
-        toSectionInsertIndex--
-      }
-
-      // Insert into target
-      lines.splice(toSectionInsertIndex, 0, removedLine)
-
-      const newContent = lines.join('\n')
-      await onContentUpdate(newContent)
-    }
+    // Move task from one section to another. Shared with the planner agent
+    // tools (#836) so a defer from either side writes the same aligned row.
+    const newContent = ops.opMoveBetweenSections(content, rawLine, fromSection, toSection)
+    if (newContent !== content) await onContentUpdate(newContent)
   }
 
   // Cut-line "Defer all below" — batch move multiple rows from Today to
@@ -2918,16 +2880,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
     if (newContent !== content) await onContentUpdate(newContent)
   }
 
-  const handleChangePriority = async (rawLine, oldPriority, newPriority) => {
-    // Replace the priority in the raw line
-    const newLine = rawLine.replace(oldPriority, newPriority)
-    const lines = content.split('\n')
-    const lineIndex = lines.findIndex(line => line.trim() === rawLine)
-    if (lineIndex !== -1) {
-      lines[lineIndex] = newLine
-      const newContent = lines.join('\n')
-      await onContentUpdate(newContent)
-    }
+  const handleChangePriority = async (rawLine, _oldPriority, newPriority) => {
+    // Header-addressed (#836): the kebab menu passes the ID cell as the old
+    // value, so replacing that string could rewrite the task ID.
+    const newContent = ops.opSetTaskPriority(content, rawLine, newPriority)
+    if (newContent !== content) await onContentUpdate(newContent)
   }
 
   const handleSnoozeTask = async (rawLine, snoozeUntil) => {
@@ -3040,9 +2997,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
     const taskName = row['Task'] || ''
     const mngrPriority = row['Work Priority'] || row['Mngr Priority'] || '-'
 
-    // Get today's date
-    const today = new Date().toISOString().split('T')[0]
-
     // Fetch journal todos if journal exists
     let todoItems = []
     if (taskId) {
@@ -3057,97 +3011,28 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
       }
     }
 
-    // Build the completed task description: Task name - item1 - item2 ...
-    let completedTaskName = taskName.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove markdown links
-    if (todoItems.length > 0) {
-      completedTaskName += ' - ' + todoItems.join(' - ')
-    }
-    // Stamp the optional close-out outcome inline so the completed board shows it.
-    const closeOutcome = (closeout.outcome || '').replace(/\|/g, '/').trim()
-    if (closeOutcome) {
-      completedTaskName += ` · _${closeOutcome}_`
-    }
+    // One shared composition (#836): the agent tools complete a task with the
+    // same row removal, archive row and weekly heading as this handler.
+    const completedContent = await storage.read(COMPLETED_FILE).catch(() => '# Completed Tasks\n')
+    const completion = ops.opCompleteTask(currentContent, completedContent, {
+      rawLine,
+      fromSection,
+      taskId,
+      taskName,
+      priority: mngrPriority,
+      todoItems,
+      outcome: closeout.outcome,
+    })
 
-    // Extract ID for display (simple number or keep as-is)
-    const displayId = taskId || '-'
-
-    // Build the completed row
-    const completedRow = `| ${displayId} | ✅ | ${completedTaskName} | ${mngrPriority} | ${today} |`
-
-    // Remove from focus-plan.md
-    const focusLines = content.split('\n')
-    let inFromSection = false
-    let lineToRemoveIndex = -1
-
-    for (let i = 0; i < focusLines.length; i++) {
-      const line = focusLines[i]
-      if (line.startsWith('## ')) {
-        inFromSection = line.replace('## ', '').trim() === fromSection
-      }
-      if (inFromSection && line.trim() === rawLine) {
-        lineToRemoveIndex = i
-        break
-      }
+    if (completion.removed) {
+      await onContentUpdate(completion.board)
     }
 
-    if (lineToRemoveIndex !== -1) {
-      focusLines.splice(lineToRemoveIndex, 1)
-      // Use the potentially bridged content as the base
-      const finalFocusLines = currentContent.split('\n')
-      const finalLineToRemoveIndex = finalFocusLines.findIndex(l => l.trim() === rawLine)
-      if (finalLineToRemoveIndex !== -1) {
-        finalFocusLines.splice(finalLineToRemoveIndex, 1)
-      }
-      await onContentUpdate(finalFocusLines.join('\n'))
-    }
-
-    // Add to focus-plan-completed.md under the current week
+    // Add to the completed board under the current week
     try {
-      const completedContent = await storage.read(COMPLETED_FILE).catch(() => '# Completed Tasks\n')
-      const completedLines = completedContent.split('\n')
-
-      // Compute Monday of the current week (M/D/YYYY format)
-      const now = new Date()
-      const dayOfWeek = now.getDay()
-      const monday = new Date(now)
-      monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
-      const weekLabel = `${monday.getMonth() + 1}/${monday.getDate()}/${monday.getFullYear()}`
-      const weekHeader = `## Week of ${weekLabel}`
-
-      // Find if this week's section already exists
-      let insertIndex = -1
-      for (let i = 0; i < completedLines.length; i++) {
-        const line = completedLines[i]
-        if (line.trim() === weekHeader) {
-          // Found matching week — find its table separator and insert after it
-          for (let j = i + 1; j < completedLines.length; j++) {
-            if (completedLines[j].trim().startsWith('|') && completedLines[j].includes('---')) {
-              insertIndex = j + 1
-              break
-            }
-          }
-          break
-        }
+      if (completion.completed !== completedContent) {
+        await storage.write(COMPLETED_FILE, completion.completed)
       }
-
-      // If week section doesn't exist, create it after the "# Completed Tasks" heading
-      if (insertIndex === -1) {
-        let headerIndex = completedLines.findIndex(l => l.startsWith('# Completed Tasks'))
-        if (headerIndex === -1) headerIndex = 0
-        const newSection = [
-          '',
-          weekHeader,
-          '',
-          '| # | 🎯 | Task | Work Priority | Completed Date |',
-          '|---|---|------|---------------|----------------|',
-          completedRow
-        ]
-        completedLines.splice(headerIndex + 1, 0, ...newSection)
-      } else {
-        completedLines.splice(insertIndex, 0, completedRow)
-      }
-
-      await storage.write(COMPLETED_FILE, completedLines.join('\n'))
     } catch (e) {
       console.error('Failed to update completed file:', e)
     }
@@ -3169,69 +3054,17 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
   }
 
   const handleAddTask = async ({ task, priority, linkedTask, section }) => {
-    const lines = content.split('\n')
-    let inTargetSection = false
-    let insertIndex = -1
-    let maxId = 0
-
-    // Existing journal IDs are only a collision-skip set — numbering is driven
+    // Existing journal IDs are only a collision-skip set ? numbering is driven
     // by the planner's own rows so a stray/foreign high journal ID can't inflate it.
     const journalIds = await getJournalIds()
     for (const id of Object.keys(taskSettings)) journalIds.add(Number(id))
 
-    // Check if linkedTask is a URL with an extractable ticket/incident ID
-    const extractTicketId = (url) => {
-      const endMatch = url.match(/\/(\d+)\/?(?:[?#].*)?$/)
-      if (endMatch) return endMatch[1]
-      const midMatch = url.match(/\/(\d{5,})\//)
-      if (midMatch) return midMatch[1]
-      return null
-    }
-    const trimmedLinked = linkedTask ? linkedTask.trim() : ''
-    const isUrl = /^https?:\/\//.test(trimmedLinked)
-    const adoUrlMatch = isUrl ? { id: extractTicketId(trimmedLinked), url: trimmedLinked } : null
-
-    // Find the target section, locate insert point, and track max ID
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-
-      if (line.startsWith('## ')) {
-        inTargetSection = line.replace('## ', '').trim() === section
-      }
-
-      // Find the separator row (|---|---|...) in target section
-      if (inTargetSection && insertIndex === -1 && line.trim().startsWith('|') && line.includes('---')) {
-        insertIndex = i + 1
-      }
-
-      // Track max ID from all table rows
-      if (line.trim().startsWith('|')) {
-        const cells = line.split('|').slice(1, -1).map(c => c.trim())
-        if (cells.length >= 1 && cells[0] !== 'ID' && !/^[-:]+$/.test(cells[0])) {
-          const numMatch = cells[0].match(/^(\d+)/)
-          if (numMatch) {
-            maxId = Math.max(maxId, parseInt(numMatch[1], 10))
-          }
-        }
-      }
-    }
-
-    if (insertIndex !== -1) {
-      let newId = maxId + 1
-      while (journalIds.has(newId)) newId++
-      const today = new Date().toISOString().split('T')[0]
-      if (adoUrlMatch && adoUrlMatch.id) {
-        const adoId = adoUrlMatch.id
-        const adoUrl = adoUrlMatch.url.replace(/\/$/, '')
-        const newRow = `| ${newId},[${adoId}](${adoUrl}) | ${priority} | ${task} | - | ${today} | |`
-        lines.splice(insertIndex, 0, newRow)
-      } else {
-        const newRow = `| ${newId} | ${priority} | ${task} | - | ${today} | ${linkedTask || ''} |`
-        lines.splice(insertIndex, 0, newRow)
-      }
-      await onContentUpdate(lines.join('\n'))
-      scrollToNewTaskAfterRender(newId)
-    }
+    // Shared with the planner agent tools (#836): ID allocation, external-link
+    // ID cells and section-aligned rows come from one implementation.
+    const result = ops.opAddTask(content, { task, priority, linkedTask, section }, journalIds)
+    if (typeof result === 'string') return
+    await onContentUpdate(result.content)
+    scrollToNewTaskAfterRender(result.newId)
   }
 
   const handleAddAndPrioritize = async (taskName, prioritySectionTitle) => {
@@ -3344,8 +3177,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
 
   const handleCreateJournal = async (taskId, taskName) => {
     // Clean task name for title (remove markdown links and special chars)
-    const cleanTaskName = taskName.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
-    const journalContent = `# Task ${taskId}: ${cleanTaskName}\n\n- TODO: \n`
+    const journalContent = buildNewJournal(taskId, taskName)
     const journalPath = `journal/task-${taskId}.md`
 
     try {
@@ -3896,33 +3728,14 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
   // here and in the renderer.
   const handleToggleTodo = async (index) => {
     if (index == null || sending) return
-    const lines = content.split(/\r?\n/)
-    let count = -1
-    for (let i = 0; i < lines.length; i++) {
-      const raw = lines[i]
-      const t = raw.trim()
-      if (/^>/.test(t)) continue
-      let next = null
-      if (/^(?:[-*+]|\d+[.)])\s*\[([ xX])\]\s*(.+)/.test(t)) {
-        next = raw.replace(/\[([ xX])\]/, (_, c) => (c === ' ' ? '[x]' : '[ ]'))
-      } else if (/^-\s*TODO:\s*(.+)/i.test(t)) {
-        next = raw.replace(/(-\s*)TODO(\s*:)/i, '$1DONE$2')
-      } else if (/^-\s*DONE:\s*(.+)/i.test(t)) {
-        next = raw.replace(/(-\s*)DONE(\s*:)/i, '$1TODO$2')
-      } else {
-        continue
-      }
-      count++
-      if (count === index) {
-        lines[i] = next
-        setSending(true)
-        try {
-          await onContentUpdate(lines.join('\n'))
-        } finally {
-          setSending(false)
-        }
-        return
-      }
+    // Shared enumeration (#836): agent tools address todos by this same index.
+    const next = toggleTodoAt(content, index)
+    if (next == null) return
+    setSending(true)
+    try {
+      await onContentUpdate(next)
+    } finally {
+      setSending(false)
     }
   }
 

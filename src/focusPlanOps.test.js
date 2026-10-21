@@ -14,6 +14,10 @@ import {
   opRenameTask,
   opSetTaskSnooze,
   opSnoozeTask,
+  listBoardTasks,
+  findTasksById,
+  opSetTaskPriority,
+  opCompleteTask,
 } from './focusPlanOps.js'
 
 const plan = [
@@ -406,5 +410,54 @@ describe('opAppendToCompleted', () => {
   it('appends when no taskId is supplied (legacy call shape)', () => {
     const out = opAppendToCompleted(completed, '| 44 | ✅ | Legacy | P2 | 2026-01-04 |')
     expect(out).toContain('| 44 | ✅ | Legacy | P2 | 2026-01-04 |')
+  })
+})
+
+describe('#836 shared task ops', () => {
+  const board = [
+    '## Today',
+    '',
+    '| ID | 🎯 | Task | Work Priority | Added | Linked ID |',
+    '|---|---|------|---------------|-------|-----------|',
+    '| 330 | 🟡 | Party 330 | - | 2026-06-27 | 323 |',
+    '| 451 | 🔴 | Other | - | 2026-08-30 | 330 |',
+    '',
+    '## Deferred',
+    '',
+    '| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| 335 | 🟡 | Child | - | 2026-07-04 | 2026-11-01 | 330 |',
+    '| 336 | 🟡 | Short | - | 2026-07-04 | 330 |',
+  ].join('\n')
+
+  it('lists tasks header-aligned, including ragged rows', () => {
+    const tasks = listBoardTasks(board)
+    expect(tasks.map(t => [t.id, t.section, t.linkedId, t.wake])).toEqual([
+      ['330', 'Today', '323', ''], ['451', 'Today', '330', ''], ['335', 'Deferred', '330', '2026-11-01'], ['336', 'Deferred', '330', ''],
+    ])
+    expect(findTasksById(board, '335')[0].title).toBe('Child')
+  })
+
+  it('sets the priority cell, never the ID even when the old value given is the ID', () => {
+    const next = opSetTaskPriority(board, '| 330 | 🟡 | Party 330 | - | 2026-06-27 | 323 |', '🔴')
+    expect(next).toContain('| 330 | 🔴 | Party 330 | - | 2026-06-27 | 323 |')
+  })
+
+  it('bridges Linked ID by header, including 7-column Deferred rows', () => {
+    const next = opBridgeLinks(board, '330', '323')
+    expect(next).toContain('| 335 | 🟡 | Child | - | 2026-07-04 | 2026-11-01 | 323 |')
+    expect(next).toContain('| 451 | 🔴 | Other | - | 2026-08-30 | 323 |')
+    expect(next).toContain('| 336 | 🟡 | Short | - | 2026-07-04 |  | 323 |')
+  })
+
+  it('completes a task once, archiving under the week heading', () => {
+    const done = opCompleteTask(board, '# Completed Tasks\n', {
+      rawLine: '| 330 | 🟡 | Party 330 | - | 2026-06-27 | 323 |', fromSection: 'Today', taskId: '330', taskName: 'Party 330', priority: '-', outcome: 'Done',
+    })
+    expect(done.removed).toBe(true)
+    expect(done.board).not.toContain('Party 330')
+    expect(done.completed).toMatch(/## Week of .*\n\n\| # \| 🎯 \|[\s\S]*\| 330 \| ✅ \| Party 330 · _Done_ \|/)
+    const again = opCompleteTask(done.board, done.completed, { rawLine: 'missing', fromSection: 'Today', taskId: '330', taskName: 'Party 330' })
+    expect(again.completed).toBe(done.completed)
   })
 })

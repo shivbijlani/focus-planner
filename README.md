@@ -63,6 +63,16 @@ account/source draft isolation, embedded styling, and publisher guard contracts.
 See [the behavior contract](docs/spec/Domain-docs.md) and
 [the publishing procedure](plugins/overnight-agent/skills/docs-publish/SKILL.md).
 
+## Agent planner tools
+
+Agents such as Muse can find, add, prioritize, defer and complete tasks, check journal
+todos and append agent-attributed journal notes without driving the UI, using the pinned
+[`planner-tools`](packages/planner-tools/README.md) release (Node 22+, no dependencies).
+It runs the UI's own `focusPlanOps.js`/`journalChat.js` mutations against the OneDrive app
+folder with `If-Match` writes, offers a tokenless broker mode for Muse, and cannot touch
+guardrail or settings files. Discovery skill:
+[`planner-tools`](plugins/overnight-agent/skills/planner-tools/SKILL.md).
+
 ## Manual Start
 
 ```powershell

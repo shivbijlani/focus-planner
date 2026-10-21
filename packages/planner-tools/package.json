@@ -1,0 +1,13 @@
+{
+  "name": "@shivbijlani/planner-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Focus Planner agent tools: CLI and stdio MCP with tokenless broker plans and conditional OneDrive writes.",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "bin": { "planner": "./bin/planner.js" },
+  "scripts": {
+    "pack:release": "node scripts/pack.mjs dist"
+  }
+}
