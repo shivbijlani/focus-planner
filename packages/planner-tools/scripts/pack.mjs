@@ -17,6 +17,11 @@ const pkg = JSON.parse(fs.readFileSync(path.join(PKG_DIR, 'package.json'), 'utf8
 const rel = (p) => path.relative(REPO, p).split(path.sep).join('/')
 const read = (p) => fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n')
 
+// Repository workspace packages the closure may import by name. The archive
+// ships each as a two-file shim under node_modules that re-exports the
+// workspace source, so imported modules stay byte-identical to the repository.
+const WORKSPACE_PACKAGES = { '@focus/docs-core': 'packages/docs-core/src/index.js' }
+
 export function importClosure(entry) {
   const seen = new Set()
   const queue = [entry]
@@ -28,11 +33,26 @@ export function importClosure(entry) {
     for (const m of text.matchAll(/(?:^|\n)\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g)) {
       const spec = m[1] || m[2]
       if (spec.startsWith('node:')) continue
+      if (Object.hasOwn(WORKSPACE_PACKAGES, spec)) {
+        queue.push(path.join(REPO, WORKSPACE_PACKAGES[spec]))
+        continue
+      }
       if (!spec.startsWith('.')) throw new Error(`${rel(file)} imports "${spec}"; the release must have no npm dependencies.`)
       queue.push(path.resolve(path.dirname(file), spec))
     }
   }
   return [...seen].sort()
+}
+
+function workspaceShims() {
+  const entries = new Map()
+  for (const [name, target] of Object.entries(WORKSPACE_PACKAGES)) {
+    const dir = `node_modules/${name}`
+    const up = dir.split('/').map(() => '..').join('/')
+    entries.set(`${dir}/package.json`, Buffer.from(`${JSON.stringify({ name, private: true, type: 'module', main: 'index.js' }, null, 2)}\n`))
+    entries.set(`${dir}/index.js`, Buffer.from(`export * from '${up}/${target}'\n`))
+  }
+  return entries
 }
 
 function tarEntry(name, data) {
@@ -61,6 +81,7 @@ export function buildRelease(outDir) {
   const files = importClosure(path.join(PKG_DIR, 'bin', 'planner.js'))
   const entries = new Map()
   for (const file of files) entries.set(rel(file), Buffer.from(read(file), 'utf8'))
+  for (const [name, data] of workspaceShims()) entries.set(name, data)
   entries.set('README.md', Buffer.from(read(path.join(PKG_DIR, 'README.md')), 'utf8'))
   entries.set('package.json', Buffer.from(`${JSON.stringify({
     name: pkg.name, version: pkg.version, description: pkg.description, license: pkg.license, type: 'module',

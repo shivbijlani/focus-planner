@@ -9,20 +9,20 @@
 // the very same requests through `runTool`. One planning path, two executors.
 import { OPERATIONS } from './operations.js'
 import { ToolError, requireValue } from './errors.js'
-import { JOURNAL_DIR, assertReadable, assertWritable, encodePath } from './paths.js'
+import { assertReadable, assertWritable, encodePath, isListing } from './paths.js'
 
 export const GRAPH = 'https://graph.microsoft.com/v1.0'
 export const APPROOT = `${GRAPH}/me/drive/special/approot`
 export const MAX_ATTEMPTS = 6
 
 const READ_FILE_INSTRUCTIONS = 'GET this URL through the secure Graph broker (Authorization substituted on egress). From the JSON take "id", "eTag" and "@microsoft.graph.downloadUrl"; download that URL WITHOUT any Authorization header; then GET the metadata URL again and use the content only if id and eTag are unchanged (otherwise repeat). Supply snapshots[filename] = {"content": <UTF-8 text>, "id": ..., "etag": ...}. Only a confirmed HTTP 404 becomes {"content": null, "id": null, "etag": null}.'
-const READ_LIST_INSTRUCTIONS = 'GET this URL through the secure Graph broker and follow every "@odata.nextLink". Supply snapshots["journal/"] = {"names": [every value[].name]}. A confirmed HTTP 404 becomes {"names": []}.'
+const READ_LIST_INSTRUCTIONS = 'GET this URL through the secure Graph broker and follow every "@odata.nextLink". Supply snapshots[<this filename, ending in "/">] = {"names": [every value[].name]}. A confirmed HTTP 404 becomes {"names": []}.'
 const AFTER_WRITE = 'Execute the writes in order, each exactly as given (UTF-8 body, keep If-Match / If-None-Match). Stop at the first non-2xx response. Afterwards, whatever happened (success, 409, 412, timeout), discard ALL snapshots, read again and call this tool again with the same tool, arguments and operationId. Only state "already_applied" means the change is saved. On 401/403 stop and ask the user to reconnect; never retry without the precondition headers.'
 
 function readRequest(name) {
   assertReadable(name)
-  if (name === JOURNAL_DIR) {
-    return { filename: name, kind: 'listing', method: 'GET', url: `${APPROOT}:/journal:/children?$select=name&$top=999`, instructions: READ_LIST_INSTRUCTIONS }
+  if (isListing(name)) {
+    return { filename: name, kind: 'listing', method: 'GET', url: `${APPROOT}:/${encodePath(name)}:/children?$select=name&$top=999`, instructions: READ_LIST_INSTRUCTIONS }
   }
   return { filename: name, kind: 'file', method: 'GET', url: `${APPROOT}:/${encodePath(name)}`, instructions: READ_FILE_INSTRUCTIONS }
 }
@@ -51,8 +51,8 @@ function validateSnapshots(snapshots) {
   for (const [name, snap] of Object.entries(snapshots)) {
     assertReadable(name)
     requireValue(snap && typeof snap === 'object', `Snapshot ${name} must be an object.`)
-    if (name === JOURNAL_DIR) {
-      requireValue(Array.isArray(snap.names) && snap.names.every(n => typeof n === 'string'), 'snapshots["journal/"] must be {"names": [..]}.')
+    if (isListing(name)) {
+      requireValue(Array.isArray(snap.names) && snap.names.every(n => typeof n === 'string'), `snapshots["${name}"] must be {"names": [..]}.`)
       continue
     }
     if (snap.content === null) {
@@ -89,12 +89,23 @@ export async function planTool(request, { now = Date.now() } = {}) {
   const missing = needs.filter(name => !Object.hasOwn(snapshots, name))
   if (missing.length) return { state: 'read_required', tool, reads: missing.map(readRequest) }
 
-  const computed = op.readOnly
-    ? { result: op.compute(args, snapshots, { now }), writes: [] }
-    : op.compute(args, snapshots, { now })
+  let computed
+  try {
+    computed = op.readOnly
+      ? { result: op.compute(args, snapshots, { now }), writes: [] }
+      : op.compute(args, snapshots, { now })
+    if (computed && typeof computed.then === 'function') computed = await computed
+    if (op.readOnly && computed?.result && typeof computed.result.then === 'function') computed = { ...computed, result: await computed.result }
+  } catch (error) {
+    // Operations that discover what to read as they go (Docs) ask for more files this way.
+    if (error instanceof ToolError && error.code === 'NEEDS_READS') {
+      return { state: 'read_required', tool, reads: error.details.filter(name => !Object.hasOwn(snapshots, name)).map(readRequest) }
+    }
+    throw error
+  }
   if (op.readOnly) return { state: 'read_complete', tool, result: computed.result }
   if (!computed.writes.length) {
-    return { state: 'already_applied', tool, result: computed.result, guidance: 'Verified on OneDrive. You may report this change as saved.' }
+    return { state: 'already_applied', tool, result: computed.result, guidance: computed.appliedGuidance || 'Verified on OneDrive. You may report this change as saved.' }
   }
   return {
     state: 'write_required',
@@ -103,7 +114,7 @@ export async function planTool(request, { now = Date.now() } = {}) {
     writes: computed.writes.map(w => ({
       filename: w.name,
       purpose: w.purpose,
-      preview: w.name.endsWith('.json') ? { summary: w.purpose } : preview(snapshots[w.name]?.content, w.content),
+      preview: w.name.endsWith('.json') || w.name.startsWith('docs/') ? { summary: w.purpose } : preview(snapshots[w.name]?.content, w.content),
       request: writeRequest(w.name, w.content, snapshots[w.name]),
     })),
     afterWrite: AFTER_WRITE,

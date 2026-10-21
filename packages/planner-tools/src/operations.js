@@ -38,8 +38,9 @@ import { mdTableCodec } from '../../folder-sync/src/codecs/mdTable.js'
 import { fingerprint, parseSidecar, serializeSidecar } from '../../folder-sync/src/merge.js'
 import { ToolError, requireValue } from './errors.js'
 import { BOARD, BOARD_SIDECAR, COMPLETED, JOURNAL_DIR, TASK_SETTINGS, journalPath } from './paths.js'
+import { docsRead, makeDocsPublish } from './docs.js'
 
-export const VERSION = '1.0.0'
+export const VERSION = '1.1.0'
 
 // ── Input validation ────────────────────────────────────────────────────────
 
@@ -478,4 +479,6 @@ export const OPERATIONS = {
   append_journal: appendJournal,
   set_todo: setTodo,
   complete_task: completeTask,
+  docs_read: docsRead,
+  docs_publish: makeDocsPublish({ appendJournal, operationIdArg, authorArg, timeZoneArg }),
 }
