@@ -147,10 +147,10 @@ function requireDocs(snapshots) {
  * The files a task's Docs review set needs, so one round fetches them together
  * instead of the publisher discovering them one by one.
  */
-function reviewSetFiles(index, taskId) {
+function reviewSetFiles(index, taskId, { history = true } = {}) {
   const primary = index.tasks[taskId]
   const ids = primary ? reviewSet(index, primary, 3) : []
-  return [journalPath(taskId), ...ids.flatMap(id => [docPath(id), reviewPath(id), responsePath(id), historyPath(id, index.docs[id].rev)])]
+  return [journalPath(taskId), ...ids.flatMap(id => [docPath(id), reviewPath(id), responsePath(id), ...(history ? [historyPath(id, index.docs[id].rev)] : [])])]
 }
 
 function prefetch(snapshots, names) {
@@ -202,7 +202,7 @@ export const docsRead = {
   async compute(args, snapshots) {
     const taskId = taskIdArg(args.taskId)
     const index = requireDocs(snapshots)
-    prefetch(snapshots, reviewSetFiles(index, taskId))
+    prefetch(snapshots, reviewSetFiles(index, taskId, { history: false }))
     const io = new SnapshotIo(snapshots, { historyFilter: historyOnlyCurrent(index) })
     let status
     let comments
