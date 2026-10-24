@@ -465,6 +465,18 @@ the transport sweep proves the harness will ever try. `plugins/overnight-agent/c
 mutates the recognised-transport list and the config reader to prove each arm is load-bearing, and
 a CI job runs the sweep on every push so a bad transport value cannot land unnoticed a second time.
 
+## How the preventive-restart supervisor is proven
+
+The supervisor in `plugins/overnight-agent/checks/reliability-supervisor.mjs` is the one component that can restart the desktop app, so its executable specification, `plugins/overnight-agent/checks/reliability-supervisor.tests.mjs`, is the largest check in the plugin. It pins these rules:
+
+- **Activity is three-valued.** Human, tool, background, startup and unknown activity are never treated as idle; unknown postpones rather than counting as quiet, and a pending user interaction postpones without requesting shutdown. Zero sessions need a continuously observed quiet window, and stale last-moment evidence is never admitted.
+- **Intent is durable before action.** An attempt is persisted before shutdown; a crashed supervisor is recovered without a duplicate action and cooldown survives; only durable restart intents (not quiet-window postponements) count toward cooldown.
+- **One owner.** The direct CLI shares the daemon's action lock and cannot override it; concurrent expired-lock reclamation elects exactly one owner, an orphaned reclamation claim expires, and losing ownership prevents the critical action.
+- **Graceful first, force only when authorised.** Force runs only after the graceful timeout and a quiet revalidation, is vetoed immediately before tree termination if protected activity appears, and has a bounded budget. The core contains no process-termination actuator; it only asks the command layer. A command timeout reports an *unknown* outcome rather than claiming nothing was terminated.
+- **Bounded recovery and audit.** Relaunch and startup failures exhaust a bounded attempt budget; a native launch reuses an existing distinct app instance instead of duplicating it; audit records carry bounded evidence and the required recovery fields; scheduler verification distinguishes "ready, nothing due" from "not ready" using the successful launch boundary.
+- **Preventive cycle M/N.** Restart is offered after M and forced by N; a confirmed-stall request bypasses M/N and coalesces with a concurrent hard deadline into exactly one restart; a failed restart keeps the original anchor; a distinct current app-root start is the authoritative anchor; a succeeded request id is consumed once; the hard deadline cannot bypass cooldown.
+- **Defaults.** Durable validated defaults enable preventive recycling and the CLI emits a stable result contract.
+
 ## The mutation-tested sweep harness
 
 The repo carries many narrow checks because each one exists to catch one named silent-failure shape,

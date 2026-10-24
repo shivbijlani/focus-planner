@@ -46,6 +46,7 @@ Those route registrations in `server.js` are the whole backend surface. The impl
 
 Even without direct root tests, the code makes several required behaviours explicit:
 
+- Browser end-to-end coverage lives in `e2e/settings.spec.js`, which exercises the Settings dialog: the agent-gate and agent-settings editors save and survive a reload; the mission statement persists and pins to the board; the storage choices offered today are browser, local folder, OneDrive and Google Drive, and the picker lists every provider when storage cannot start; switching a saved storage source reloads the board from that choice; a failed active-source restore falls back without changing saved choices and offers reconnect; and cancelling a reconnect or an OAuth source switch leaves the expected source active.
 - The local API serves only markdown content under the configured planner directory and skips hidden files and `node_modules` when listing.
 - `POST /api/pick-folder` shells out to `powershell.exe` and uses `System.Windows.Forms.FolderBrowserDialog`, so this endpoint is intentionally **Windows-specific**.
 - `vite.config.js` injects a build ID through `define.__APP_BUILD__` and sets `base: '/'`, which the app’s update UI and service-worker registration depend on.
