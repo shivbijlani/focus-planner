@@ -34,12 +34,12 @@ Every core design decision in this system exists to make that safe:
 
 ## How the pieces fit together
 
-Twelve domains divide the system: a browser-facing board (`app`), the on-disk formats and their
+Sixteen domains divide the system: a browser-facing board (`app`), the on-disk formats and their
 shared config (`config`, `storage`), a bidirectional sync engine (`folder-sync`), an autonomous
 overnight worker (`overnight-agent`), a Telegram mirror (`telegram-bridge`), a static journal
 publisher (`task-paper`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
 the server and build entry points (`root`), and repository tooling including this spec's own
-generation pipeline (`scripts`). See [Architecture](Architecture) for how they compose at runtime and
+generation pipeline (`scripts`), the native catch-up Docs libraries and publisher (`docs-core`, `docs-publisher`), and the shared ordering rules and agent tools (`planner-shared-core`, `planner-tools`). See [Architecture](Architecture) for how they compose at runtime and
 [Rebuilding](Rebuilding) for the order to build them in.
 
 ## Pages
@@ -50,6 +50,10 @@ generation pipeline (`scripts`). See [Architecture](Architecture) for how they c
 | [Technical Architecture](Technical-Architecture) | Optional architectural ideas, diagrams, and principles, without implementation code. |
 | [Data-Formats](Data-Formats) | Every persisted format — board, journals, Docs, agent/bridge state — with annotated real samples and invariants. |
 | [Domain-docs](Domain-docs) | Native catch-up Docs: file ownership, data formats, block/comment preservation, publisher and agent-loop contracts, test vectors. |
+| [Domain-docs-core](Domain-docs-core) | The pure Docs library: block parsing, anchoring, review merge, derived state, reader limits. |
+| [Domain-docs-publisher](Domain-docs-publisher) | `fp-docs`, the sole writer of publisher-owned Docs files: lint, atomic publish, dispositions, lock. |
+| [Domain-planner-shared-core](Domain-planner-shared-core) | Pure task-sort and move-planning rules shared by two apps. |
+| [Domain-planner-tools](Domain-planner-tools) | Agent CLI/MCP that edits the planner on OneDrive via guarded, conditional, idempotent writes. |
 | [Domain-agent-metadata](Domain-agent-metadata) | Per-device agent metadata files and the 🤖 session link: fingerprints, publisher and reader rules, test vectors. |
 | [Domain-lanes](Domain-lanes) | Lanes: scope each agent PC to part of the plan — `#lane:` tags, app assignments and inheritance, `agent-lanes.json`, engine and app rules, test vectors. |
 | [Domain-app](Domain-app) | The board UI and its pure content-transformation core. |
