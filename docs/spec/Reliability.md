@@ -24,6 +24,7 @@ loop itself lives under `plugins/overnight-agent/`.
 | Deploy propagation | `version-bump-sweep.mjs`, `installed-skill-drift-sweep.mjs`, `installed-capability-sweep.mjs`, `sync-oa-home.ps1`, `SKILL.md` | Merged fixes not reaching the bytes the machine actually executes |
 | Byte and journal safety | `ps1-encoding-sweep.mjs`, `journal-encoding-invariant.mjs`, `oa-state.ps1`, `write-turn.ps1`, `src/journalChat.js`, `src/journalLoadQueue.js` | Silent mojibake, re-encoding, duplicate writers, and race-shaped read/write corruption |
 | MCP and browser health | `reap-stale-mcp.ps1`, `mcp-probe.mjs`, `check-mcp-fanout.ps1`, `check-browser-slots.ps1`, `browser-watchdog.ps1`, `ensure-mcp-browsers.ps1`, `launch-signed-in-browser.ps1` | Orphaned MCP servers, dead/stuck browser slots, wrong-profile launches |
+| Supervisor self-test | `plugins/overnight-agent/checks/reliability-supervisor.tests.mjs` | The out-of-band supervisor core regressing in config validation, state loading, activity classification, cooldown, lock acquisition or the hard-restart authorisation; the test also reads the core's source text to pin invariants |
 | Guard integrity | `mutcheck-*.mjs`, `mutcheck-*.ps1` | A detector quietly becoming decorative or measuring the wrong thing |
 | Settings reconcile loop | `plugins/overnight-agent/skills/overnight-agent/user-settings.md`, `oa-state.ps1` | User configuration drifting from the values the run actually uses |
 

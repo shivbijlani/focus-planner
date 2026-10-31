@@ -314,7 +314,16 @@ The heavier verification lives in CI as PowerShell mutation checks, and those ar
 
 A faithful rebuild needs those guards or equivalent ones, because the plugin’s failure modes are mostly semantic drift rather than syntax errors.
 
-## 9. Finish by restoring CI parity
+## 9. Add the shared rules, native Docs and agent tools
+
+These four packages depend on the board grammar (step 1) and the journal grammar (step 2), and must be built in this order.
+
+1. **`planner-shared-core`** — the pure sort, priority-resolution and move-planning functions ([Domain-planner-shared-core](Domain-planner-shared-core)). Make the app's own sort module re-export it so there is one implementation. Verify with its two test files: ordering (urgent, manager rank, deepest dependency first, Eisenhower icon), the 20-node depth cap, cycle safety, and the broken-link reports.
+2. **`docs-core`** — block parsing, stable block ids, comment anchoring, review merge and reader validation ([Domain-docs-core](Domain-docs-core)). It must reuse the journal's fence rule rather than copy it. Verify with its four test files before anything writes a Docs file.
+3. **`docs-publisher`** — the `fp-docs` command and library, the only writer of publisher-owned Docs files ([Domain-docs-publisher](Domain-docs-publisher), [Domain-docs](Domain-docs)). Verify atomic rollback by injecting a failing rename, and verify it installs with `docs-core` as its only dependency.
+4. **`planner-tools`** — the ten agent operations, the plan loop, the allowlist and the reproducible release archive ([Domain-planner-tools](Domain-planner-tools)). Build `paths` (the allowlist) and the plan loop first, then operations on top of the app's own board and journal modules; verify against an in-memory fake Graph that implements eTags and both precondition headers.
+
+## 10. Finish by restoring CI parity
 
 Once the code exists, close the loop by matching the checked-in workflows:
 
@@ -327,4 +336,4 @@ Those are the exact gating steps in `.github/workflows/ci.yml`; `.github/workflo
 
 If you have to cut scope during a rebuild, do not cut Stages 1–4. The current import graph makes them the shared substrate for everything else: the UI imports them, sync imports them, and the automation stack reads the files they define.
 
-See also [Domain-app](Domain-app), [Domain-config](Domain-config), [Domain-storage](Domain-storage), [Domain-folder-sync](Domain-folder-sync), [Domain-telegram-bridge](Domain-telegram-bridge), and [Domain-overnight-agent](Domain-overnight-agent).
+See also [Domain-app](Domain-app), [Domain-config](Domain-config), [Domain-storage](Domain-storage), [Domain-folder-sync](Domain-folder-sync), [Domain-telegram-bridge](Domain-telegram-bridge), [Domain-overnight-agent](Domain-overnight-agent), [Domain-docs-core](Domain-docs-core), [Domain-docs-publisher](Domain-docs-publisher), [Domain-planner-shared-core](Domain-planner-shared-core), and [Domain-planner-tools](Domain-planner-tools).

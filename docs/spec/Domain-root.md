@@ -42,9 +42,11 @@ Those route registrations in `server.js` are the whole backend surface. The impl
 
 ## Behavioural requirements and current test gap
 
-`spec-facts.json` lists **no root-level `*.test.js` files** under `testFiles[]`. That is an important fact about this domain: its contract is presently enforced by code review, package scripts, and integration use rather than dedicated root-domain unit tests. The relevant repository scripts from `spec-facts.json` are `dev`, `server`, `start`, `build`, `lint`, `test`, and the `predev`/`prebuild` `copy-sw` step.
+The server has a unit suite, `server.test.js`, whose test names are its requirements: listing returns markdown files and folders only; reading a file returns it, 404s when it is missing and 400s without a path; writing round-trips through reading; paths that escape the planner folder are refused, including sibling-prefix, absolute and encoded traversal paths (issue #790, which reports the sibling-prefix escape, is still open although the suite pins the refusal; the guard resolves the requested path against the planner folder and rejects anything whose relative path starts with `..` or is absolute); deleting removes a file; the todos endpoint extracts checkbox and TODO/DONE items; the journal-exists endpoint reports non-empty journals only. The build and lint config have no unit tests; they are enforced by the package scripts `dev`, `server`, `start`, `build`, `lint`, `test` and the `predev`/`prebuild` `copy-sw` step.
 
-Even without direct root tests, the code makes several required behaviours explicit:
+The browser-level suite lives in `e2e/` (Playwright, configured to ignore the docs-seams spec, which has its own config). For example `e2e/settings.spec.js` covers the Settings dialog, the agent-gate and user-settings editors (an added gate line survives save and reload) and the storage providers offered. These smoke tests are slow-tolerant on a CPU-starved machine and the suite is flaky on `main` (issue #826).
+
+The code makes several required behaviours explicit:
 
 - The local API serves only markdown content under the configured planner directory and skips hidden files and `node_modules` when listing.
 - `POST /api/pick-folder` shells out to `powershell.exe` and uses `System.Windows.Forms.FolderBrowserDialog`, so this endpoint is intentionally **Windows-specific**.
@@ -53,4 +55,4 @@ Even without direct root tests, the code makes several required behaviours expli
 
 ## Failure modes
 
-The root domain’s failures are operational rather than data-model failures. If `server.js` is wrong, the local desktop workflow breaks: the browser cannot browse or edit the planner folder, or the Windows folder picker fails. If `vite.config.js` is wrong, service workers can be served from the wrong place, build IDs disappear, or CI starts collecting non-Vitest plugin self-tests and fails spuriously. If `eslint.config.js` is wrong, lint stops being a meaningful gate because globals or rules no longer match runtime reality. The absence of root-domain tests is itself a limitation worth preserving in the spec: rebuilders should not mistake these contracts for already-verified coverage.
+The root domain’s failures are operational rather than data-model failures. If `server.js` is wrong, the local desktop workflow breaks: the browser cannot browse or edit the planner folder, or the Windows folder picker fails. If `vite.config.js` is wrong, service workers can be served from the wrong place, build IDs disappear, or CI starts collecting non-Vitest plugin self-tests and fails spuriously. If `eslint.config.js` is wrong, lint stops being a meaningful gate because globals or rules no longer match runtime reality. The build and lint configuration carry no unit tests, so rebuilders should not mistake those contracts for verified coverage.
