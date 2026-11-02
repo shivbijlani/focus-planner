@@ -16,6 +16,7 @@ import {
   findTasksById,
   listBoardTasks,
   opAddTask,
+  opApplySnoozeTransitions,
   opBridgeLinks,
   opCompleteTask,
   opMoveBetweenSections,
@@ -40,7 +41,7 @@ import { ToolError, requireValue } from './errors.js'
 import { BOARD, BOARD_SIDECAR, COMPLETED, JOURNAL_DIR, TASK_SETTINGS, journalPath } from './paths.js'
 import { docsRead, makeDocsPublish } from './docs.js'
 
-export const VERSION = '1.1.0'
+export const VERSION = '1.2.0'
 
 // ── Input validation ────────────────────────────────────────────────────────
 
@@ -366,6 +367,29 @@ const moveTask = {
   },
 }
 
+const applySnoozeTransitions = {
+  needs: () => [BOARD],
+  compute(args, snapshots) {
+    operationIdArg(args.operationId)
+    const asOf = dateArg(args.asOf, 'asOf')
+    const board = requireBoard(snapshots)
+    const before = listBoardTasks(board)
+    const next = opApplySnoozeTransitions(board, asOf)
+    const afterById = new Map(listBoardTasks(next).map(task => [task.id, task]))
+    const wokeTaskIds = []
+    const deferredTaskIds = []
+    for (const task of before) {
+      const updated = afterById.get(task.id)
+      if (task.section === 'Deferred' && updated?.section === 'Today') wokeTaskIds.push(task.id)
+      if (task.section === 'Today' && updated?.section === 'Deferred') deferredTaskIds.push(task.id)
+    }
+    return {
+      result: { asOf, wokeTaskIds, deferredTaskIds },
+      writes: next === board ? [] : [{ name: BOARD, content: next, purpose: `Apply snooze transitions as of ${asOf}` }],
+    }
+  },
+}
+
 function journalBase(snapshots, board, taskId) {
   const existing = content(snapshots, journalPath(taskId))
   if (existing != null) return { text: existing, created: false }
@@ -476,6 +500,7 @@ export const OPERATIONS = {
   add_task: addTask,
   set_priority: setPriority,
   move_task: moveTask,
+  apply_snooze_transitions: applySnoozeTransitions,
   append_journal: appendJournal,
   set_todo: setTodo,
   complete_task: completeTask,

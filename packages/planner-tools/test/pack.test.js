@@ -19,12 +19,33 @@ describe('release archive', () => {
       fs.mkdirSync(extract)
       expect(spawnSync('tar', ['-xzf', a.file, '-C', extract]).status).toBe(0)
       const bin = path.join(extract, 'package', 'packages', 'planner-tools', 'bin', 'planner.js')
-      expect(spawnSync(process.execPath, [bin, '--version'], { encoding: 'utf8' }).stdout.trim()).toBe('1.1.0')
+      expect(spawnSync(process.execPath, [bin, '--version'], { encoding: 'utf8' }).stdout.trim()).toBe('1.2.0')
       const out = spawnSync(process.execPath, [bin, 'plan'], {
         encoding: 'utf8', cwd: extract,
         input: JSON.stringify({ tool: 'find_tasks', arguments: { query: 'hotel' }, snapshots: { 'planner.md': { content: BOARD, id: 'a', etag: 'b' } } }),
       })
       expect(JSON.parse(out.stdout).result.tasks[0].id).toBe('33')
+      const snooze = spawnSync(process.execPath, [bin, 'plan'], {
+        encoding: 'utf8', cwd: extract,
+        input: JSON.stringify({
+          tool: 'apply_snooze_transitions',
+          arguments: { asOf: '2026-10-21', operationId: 'test:2026-10-21:snooze001' },
+          snapshots: {
+            'planner.md': {
+              content: BOARD.replace(
+                '| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |',
+                '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-20 | 31 |',
+              ),
+              id: 'a',
+              etag: 'b',
+            },
+          },
+        }),
+      })
+      expect(JSON.parse(snooze.stdout)).toMatchObject({
+        state: 'write_required',
+        expectedResult: { asOf: '2026-10-21', wokeTaskIds: ['33'], deferredTaskIds: [] },
+      })
       // Docs tools run the shipped publisher and docs-core outside the repository.
       const docs = spawnSync(process.execPath, [bin, 'plan'], {
         encoding: 'utf8', cwd: extract,

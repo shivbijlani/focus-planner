@@ -2,8 +2,8 @@
 name: planner-tools
 description: >-
   Changes Shiv's Focus Planner (OneDrive Apps/Focus Planner) without driving the web UI:
-  find tasks, add a task, set priority, defer/move, append an agent-attributed journal note,
-  check a journal todo, or complete a task. Use whenever an agent needs to read or update
+  find tasks, add a task, set priority, defer/move, apply snooze/wake transitions, append an
+  agent-attributed journal note, check a journal todo, or complete a task. Use whenever an agent needs to read or update
   planner tasks or journals from a chat, Muse, or a script. Runs the pinned planner-tools
   release (Node 22+), which uses the app's own mutation code and conditional OneDrive writes.
   Guardrail and settings files are unreachable through it.
@@ -11,8 +11,8 @@ description: >-
 
 # Planner tools
 
-Pinned release: `planner-tools-v1.0.0` on github.com/shivbijlani/focus-planner.
-Archive `planner-tools-1.0.0.tgz`; verify it against `planner-tools-1.0.0.tgz.sha256`
+Pinned release: `planner-tools-v1.2.0` on github.com/shivbijlani/focus-planner.
+Archive `planner-tools-1.2.0.tgz`; verify it against `planner-tools-1.2.0.tgz.sha256`
 before extracting. Entry point after `tar -xzf`:
 `node package/packages/planner-tools/bin/planner.js`. Full contract: `package/README.md`.
 

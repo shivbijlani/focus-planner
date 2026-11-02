@@ -110,6 +110,66 @@ describe('priority and moves', () => {
   })
 })
 
+describe('apply_snooze_transitions', () => {
+  it('uses the UI transition rules, returns exact affected IDs, and leaves future snoozes alone', async () => {
+    const board = BOARD
+      .replace('| 31 | 🔴 | Book flights | - | 2026-10-02 | 30 |', '| 31 | 🔴 | Book flights | - | 2026-10-02 | 30 | <!-- snooze:2026-10-25 -->')
+      .replace('| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |', [
+        '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-20 | 31 |',
+        '| 34 | 🟡 | Future hotel research | - | 2026-10-03 | 2026-10-25 | 30 |',
+      ].join('\n'))
+    const { g, run } = setup({ 'planner.md': board })
+    const args = { asOf: '2026-10-21', operationId: op() }
+
+    const result = await run('apply_snooze_transitions', args)
+
+    expect(result.result).toEqual({ asOf: '2026-10-21', wokeTaskIds: ['33'], deferredTaskIds: ['31'] })
+    const updated = g.read('planner.md')
+    expect(updated).toContain('| 33 | ⚪ | Hotel research | - | 2026-10-03 | 31 |')
+    expect(updated).toContain('| 31 | 🔴 | Book flights | - | 2026-10-02 | 2026-10-25 | 30 |')
+    expect(updated).toContain('| 34 | 🟡 | Future hotel research | - | 2026-10-03 | 2026-10-25 | 30 |')
+    expect(updated).not.toContain('snooze:')
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(1)
+  })
+
+  it('reapplies after a concurrent board edit and is a no-op after verification', async () => {
+    const board = BOARD.replace('| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |', '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-20 | 31 |')
+    const { g, run } = setup({ 'planner.md': board })
+    g.state.beforeWrite = ({ files, put }) => {
+      put('planner.md', files.get('planner.md').content.replace('| 30 | 🟡 | Plan the trip |', '| 30 | 🔴 | Plan the trip |'))
+    }
+    const args = { asOf: '2026-10-21', operationId: op() }
+
+    const result = await run('apply_snooze_transitions', args)
+
+    expect(result.state).toBe('already_applied')
+    expect(result.result.wokeTaskIds).toEqual(['33'])
+    expect(g.read('planner.md')).toContain('| 30 | 🔴 | Plan the trip |')
+    expect(g.read('planner.md')).toContain('| 33 | ⚪ | Hotel research | - | 2026-10-03 | 31 |')
+    const writes = g.state.calls.filter(call => call.method === 'PUT').length
+    await run('apply_snooze_transitions', args)
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(writes)
+  })
+
+  it('rejects invalid dates and exposes the command through the MCP tool list', async () => {
+    const { client, run } = setup()
+    await expect(run('apply_snooze_transitions', { asOf: '2026-02-30', operationId: op() }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' })
+
+    const handle = protocol({ client })
+    const listing = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    expect(listing.result.tools.map(tool => tool.name)).toContain('apply_snooze_transitions')
+    const call = await handle({
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'apply_snooze_transitions', arguments: { asOf: '2026-10-21', operationId: op() } },
+    })
+    expect(call.result.structuredContent).toMatchObject({
+      state: 'already_applied',
+      result: { asOf: '2026-10-21', wokeTaskIds: [], deferredTaskIds: [] },
+    })
+  })
+})
+
 describe('append_journal', () => {
   it('writes an agent-attributed, idempotent note under the owner\'s local date', async () => {
     const { g, run } = setup()
@@ -233,7 +293,7 @@ describe('guardrails', () => {
   })
 
   it('never plans a write without a precondition', async () => {
-    const { client } = setup()
+    const { client, g } = setup()
     for (const [tool, args] of [
       ['add_task', { title: 'Z', operationId: op(), timeZone: TZ }],
       ['complete_task', { taskId: '30', operationId: op(), timeZone: TZ }],
@@ -242,6 +302,10 @@ describe('guardrails', () => {
       const plan = await runToPlan(client, tool, args)
       for (const w of plan.writes) expect(Boolean(w.request.headers['If-Match']) || w.request.headers['If-None-Match'] === '*').toBe(true)
     }
+    g.put('planner.md', BOARD.replace('| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |', '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-20 | 31 |'))
+    const wakePlan = await runToPlan(client, 'apply_snooze_transitions', { asOf: '2026-10-21', operationId: op() })
+    expect(wakePlan.state).toBe('write_required')
+    for (const w of wakePlan.writes) expect(Boolean(w.request.headers['If-Match']) || w.request.headers['If-None-Match'] === '*').toBe(true)
   })
 })
 
@@ -271,14 +335,29 @@ describe('broker transport', () => {
     expect(list.result.tools.map(t => t.name)).toEqual(['planner_plan'])
     const call = await handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'planner_plan', arguments: { tool: 'find_tasks', arguments: {}, snapshots: { 'planner.md': { content: BOARD, id: 'a', etag: 'b' } } } } })
     expect(call.result.structuredContent.result.total).toBe(4)
-    const bad = await handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'planner_plan', arguments: { tool: 'nope' } } })
+    const wake = await handle({
+      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      params: { name: 'planner_plan', arguments: {
+        tool: 'apply_snooze_transitions',
+        arguments: { asOf: '2026-10-21', operationId: op() },
+        snapshots: { 'planner.md': {
+          content: BOARD.replace('| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |', '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-20 | 31 |'),
+          id: 'a', etag: 'b',
+        } },
+      } },
+    })
+    expect(wake.result.structuredContent).toMatchObject({
+      state: 'write_required',
+      expectedResult: { wokeTaskIds: ['33'], deferredTaskIds: [] },
+    })
+    const bad = await handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'planner_plan', arguments: { tool: 'nope' } } })
     expect(bad.result.isError).toBe(true)
   })
 })
 
 describe('CLI', () => {
   it('prints its version and runs plan from stdin', () => {
-    expect(spawnSync(process.execPath, [BIN, '--version'], { encoding: 'utf8' }).stdout.trim()).toBe('1.1.0')
+    expect(spawnSync(process.execPath, [BIN, '--version'], { encoding: 'utf8' }).stdout.trim()).toBe('1.2.0')
     const out = spawnSync(process.execPath, [BIN, 'plan'], {
       encoding: 'utf8',
       input: JSON.stringify({ tool: 'find_tasks', arguments: { query: 'pack' }, snapshots: { 'planner.md': { content: BOARD, id: 'a', etag: 'b' } } }),

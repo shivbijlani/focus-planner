@@ -1,9 +1,9 @@
-# Focus Planner agent tools 1.1.0
+# Focus Planner agent tools 1.2.0
 
 Lets an agent (Muse, a Copilot chat, any process that can run Node 22+) update
 Shiv's Focus Planner without driving the web UI: find tasks, add tasks, set
-priority, defer/move, append agent-attributed journal notes, check todos and
-complete tasks. No hosted service and no npm dependencies.
+priority, defer/move, apply snooze/wake transitions, append agent-attributed
+journal notes, check todos and complete tasks. No hosted service and no npm dependencies.
 
 - **Same code as the app.** Every change is made by the Planner UI's own
   modules (`src/focusPlanOps.js`, `src/journalChat.js`) and the sync engine's
@@ -26,18 +26,18 @@ complete tasks. No hosted service and no npm dependencies.
 
 ## Install a pinned release
 
-Release: https://github.com/shivbijlani/focus-planner/releases/tag/planner-tools-v1.1.0
+Release: https://github.com/shivbijlani/focus-planner/releases/tag/planner-tools-v1.2.0
 
 ```bash
-base=https://github.com/shivbijlani/focus-planner/releases/download/planner-tools-v1.1.0
-curl -fsSLO $base/planner-tools-1.1.0.tgz
-curl -fsSLO $base/planner-tools-1.1.0.tgz.sha256
-sha256sum -c planner-tools-1.1.0.tgz.sha256      # must print OK before extracting
-tar -xzf planner-tools-1.1.0.tgz
-node package/packages/planner-tools/bin/planner.js --version   # 1.1.0
+base=https://github.com/shivbijlani/focus-planner/releases/download/planner-tools-v1.2.0
+curl -fsSLO $base/planner-tools-1.2.0.tgz
+curl -fsSLO $base/planner-tools-1.2.0.tgz.sha256
+sha256sum -c planner-tools-1.2.0.tgz.sha256      # must print OK before extracting
+tar -xzf planner-tools-1.2.0.tgz
+node package/packages/planner-tools/bin/planner.js --version   # 1.2.0
 ```
 
-Windows: `Get-FileHash planner-tools-1.1.0.tgz -Algorithm SHA256` must equal the
+Windows: `Get-FileHash planner-tools-1.2.0.tgz -Algorithm SHA256` must equal the
 first word of the `.sha256` file. Do not use an unpinned `npx`.
 
 ## Tokenless broker transport (Muse)
@@ -79,6 +79,7 @@ avoid duplicates. Use one `operationId` per intended change (16-120 of
 | `add_task` | `title`, `priority?`, `section?`, `parentId?`, `operationId`, `timeZone` | ID allocated like the app; an active task with the same title is returned instead of duplicated |
 | `set_priority` | `taskId`, `priority`, `operationId` | 🔴 🟡 🔵 ⚪ 🐸 📖 |
 | `move_task` | `taskId`, `to`, `wakeOn?`, `operationId`, `timeZone` | `wakeOn` defers until a date |
+| `apply_snooze_transitions` | `asOf`, `operationId` | Applies the UI's overdue and future snooze transitions for an explicit local date |
 | `append_journal` | `taskId`, `text`, `author`, `operationId`, `timeZone` | agent bubble; creates the journal if missing; a hidden `planner-op` marker makes retries exact |
 | `set_todo` | `taskId`, `todoIndex`, `todoText`, `done`, `operationId` | index + exact text from `get_task` |
 | `complete_task` | `taskId`, `outcome?`, `comment?`, `author?`, `operationId`, `timeZone` | archives, removes, re-parents children; confirm with the user first |

@@ -49,6 +49,14 @@ export const TOOL_DEFINITIONS = [
     annotations: mutation,
   },
   {
+    name: 'apply_snooze_transitions',
+    description: 'Apply the Planner UI snooze rules to the board as of an explicit local date. Expired Deferred tasks return to Today; future-dated snoozes misplaced in Today move to Deferred.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['asOf', 'operationId'], properties: {
+      asOf: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'The planner owner\'s local calendar date, YYYY-MM-DD.' }, operationId,
+    } },
+    annotations: mutation,
+  },
+  {
     name: 'append_journal',
     description: 'Append a note to a task journal, attributed to you (shown as an agent bubble, never as the user). Plain Markdown; no HTML comments or #/## headings outside code fences. Creates the journal if the task has none.',
     inputSchema: { type: 'object', additionalProperties: false, required: ['taskId', 'text', 'author', 'operationId', 'timeZone'], properties: {
@@ -101,7 +109,7 @@ export const TOOL_DEFINITIONS = [
 
 export const BROKER_TOOL = {
   name: 'planner_plan',
-  description: 'Tokenless Focus Planner transport. Performs no HTTP and takes no credentials. Call with tool (find_tasks, get_task, add_task, set_priority, move_task, append_journal, set_todo, complete_task, docs_read, docs_publish), its arguments, and the content/id/etag snapshots you already fetched. Follow read_required by fetching the listed Graph files (it can ask more than once as it discovers files); follow write_required by executing the conditional PUTs in order through the secure Graph broker, then discard snapshots, re-read and call again. Only "already_applied" means a change is saved; never report write_required as done. Start every request with find_tasks.',
+  description: 'Tokenless Focus Planner transport. Performs no HTTP and takes no credentials. Call with tool (find_tasks, get_task, add_task, set_priority, move_task, apply_snooze_transitions, append_journal, set_todo, complete_task, docs_read, docs_publish), its arguments, and the content/id/etag snapshots you already fetched. Follow read_required by fetching the listed Graph files (it can ask more than once as it discovers files); follow write_required by executing the conditional PUTs in order through the secure Graph broker, then discard snapshots, re-read and call again. Only "already_applied" means a change is saved; never report write_required as done. Start every request with find_tasks.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['tool', 'arguments'],
     properties: {
