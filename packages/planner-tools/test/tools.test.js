@@ -9,6 +9,7 @@ import { mdTableCodec } from '../../folder-sync/src/codecs/mdTable.js'
 import { toCollection, reconcileRecordsFile } from '../../folder-sync/src/records.js'
 import { stampLocalChanges, serializeSidecar } from '../../folder-sync/src/merge.js'
 import { BOARD, COMPLETED, JOURNAL_31, fakeGraph } from './fakeGraph.js'
+import { opPromoteToManagerPriority, opRemoveFromManagerPriority, opSetTaskPrioritized } from '../../../src/focusPlanOps.js'
 
 const TZ = 'America/Los_Angeles'
 const T0 = 1_790_000_000_000
@@ -107,6 +108,82 @@ describe('priority and moves', () => {
     const back = await run('move_task', { taskId: '33', to: 'Today', operationId: op(), timeZone: TZ })
     expect(back.state).toBe('already_applied')
     expect(g.read('planner.md').split('## Deferred')[0]).toContain('| 33 |')
+  })
+})
+
+describe('your priorities membership', () => {
+  it('uses the app mutations to add and remove membership without changing task rows, and retries make no writes', async () => {
+    const { g, run } = setup()
+    const args = { taskId: '31', prioritized: true, operationId: op() }
+    const added = await run('set_prioritized', args)
+    expect(added).toMatchObject({ state: 'already_applied', result: { taskId: '31', prioritized: true } })
+    const expected = opPromoteToManagerPriority(BOARD, '31')
+    expect(g.read('planner.md')).toBe(expected)
+    const writes = g.state.calls.filter(call => call.method === 'PUT').length
+    await run('set_prioritized', args)
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(writes)
+
+    await run('set_prioritized', { taskId: '30', prioritized: false, operationId: op() })
+    expect(g.read('planner.md')).toBe(opRemoveFromManagerPriority(expected, '30'))
+    expect(g.read('planner.md')).toContain('## Priorities\n\n1. 31')
+    expect(g.read('planner.md').split('## Priorities')[0]).toBe(BOARD.split('## Priorities')[0])
+    const afterRemoval = g.state.calls.filter(call => call.method === 'PUT').length
+    await run('set_prioritized', { taskId: '30', prioritized: false, operationId: op() })
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(afterRemoval)
+    expect(g.read('agent-gate.md')).toBe('# human-owned gate\n')
+  })
+
+  it('creates a missing priorities section and ignores numbered notes outside it', () => {
+    const board = BOARD.split('## Priorities')[0] + '## Notes\n\n1. 31\n'
+    expect(opSetTaskPrioritized(board, '31', true)).toBe(opPromoteToManagerPriority(board, '31'))
+    expect(opSetTaskPrioritized(board, '31', false)).toBe(board)
+    const legacy = BOARD.replace('## Priorities', '## Manager Priorities')
+    expect(opSetTaskPrioritized(legacy, '30', true)).toBe(legacy)
+  })
+
+  it('rereads after a conflict and preserves another priority and an unrelated task edit', async () => {
+    const { g, run } = setup()
+    g.state.beforeWrite = ({ files, put }) => {
+      put('planner.md', opPromoteToManagerPriority(files.get('planner.md').content, '32')
+        .replace('| 30 | 🟡 | Plan the trip |', '| 30 | 🔴 | Plan the trip |'))
+    }
+    await run('set_prioritized', { taskId: '31', prioritized: true, operationId: op() })
+    expect(g.read('planner.md')).toContain('1. 30\n2. 32\n3. 31')
+    expect(g.read('planner.md')).toContain('| 30 | 🔴 | Plan the trip |')
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(2)
+    expect(g.state.calls.filter(call => call.method === 'PUT').every(call => call.headers['If-Match'])).toBe(true)
+  })
+
+  it('rejects invalid membership, missing tasks and duplicate IDs before writing', async () => {
+    const { g, run } = setup()
+    for (const prioritized of [undefined, 'true', 1, null]) {
+      await expect(run('set_prioritized', { taskId: '31', prioritized, operationId: op() }))
+        .rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    }
+    await expect(run('set_prioritized', { taskId: '999', prioritized: true, operationId: op() }))
+      .rejects.toMatchObject({ code: 'TASK_NOT_FOUND' })
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(0)
+    const duplicate = setup({ 'planner.md': BOARD.replace('| 32 | 🟡 | Pack |', '| 31 | 🟡 | Pack |') })
+    await expect(duplicate.run('set_prioritized', { taskId: '31', prioritized: true, operationId: op() }))
+      .rejects.toMatchObject({ code: 'DUPLICATE_TASK_ID' })
+    expect(duplicate.g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(0)
+  })
+
+  it('exposes typed MCP membership and verifies the result through broker MCP', async () => {
+    const { g, client } = setup()
+    const direct = protocol({ client })
+    const listing = await direct({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    expect(listing.result.tools.find(tool => tool.name === 'set_prioritized').inputSchema.properties.prioritized)
+      .toEqual({ type: 'boolean' })
+    const result = await direct({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+      name: 'set_prioritized', arguments: { taskId: '31', prioritized: true, operationId: op() },
+    } })
+    expect(result.result.structuredContent).toMatchObject({ state: 'already_applied', result: { taskId: '31', prioritized: true } })
+    const removed = await runBrokerMcp(protocol({ brokerMode: true }), client, 'set_prioritized', {
+      taskId: '31', prioritized: false, operationId: op(),
+    })
+    expect(removed).toMatchObject({ state: 'already_applied', result: { taskId: '31', prioritized: false } })
+    expect(g.read('planner.md')).toBe(opRemoveFromManagerPriority(opPromoteToManagerPriority(BOARD, '31'), '31'))
   })
 })
 
@@ -409,6 +486,13 @@ describe('Muse broker synthetic intake scenario', () => {
       timeZone: TZ,
     })
     const checklistId = checklist.result.taskId
+    await runBrokerMcp(handle, client, 'set_prioritized', {
+      taskId: checklistId, prioritized: true, operationId: op(),
+    })
+    await runBrokerMcp(handle, client, 'set_prioritized', {
+      taskId: checklistId, prioritized: true, operationId: op(),
+    })
+    expect(g.read('planner.md').split('## Priorities')[1].trim()).toBe(`1. 30\n2. ${checklistId}`)
 
     const children = []
     for (const [title, priority] of [

@@ -912,6 +912,19 @@ export function opRemoveFromManagerPriority(content, taskId) {
   return [...before, ...renumbered, ...after].join('\n')
 }
 
+export function opSetTaskPrioritized(content, taskId, prioritized) {
+  const lines = content.split('\n')
+  const { start, end } = findPrioritiesRange(lines)
+  const present = start !== -1 && lines.slice(start + 1, end).some(line => {
+    const match = line.trim().match(/^\d+\.\s+(.+)$/)
+    return match?.[1].trim() === taskId
+  })
+  if (present === prioritized) return content
+  return prioritized
+    ? opPromoteToManagerPriority(content, taskId)
+    : opRemoveFromManagerPriority(content, taskId)
+}
+
 // ── Move-to-completed ───────────────────────────────────────────────
 //
 // Splits the work between two files — focus-plan.md (remove the row) and

@@ -2,7 +2,7 @@
 
 Lets an agent (Muse, a Copilot chat, any process that can run Node 22+) update
 Shiv's Focus Planner without driving the web UI: find tasks, add tasks, set
-priority, defer/move, apply snooze/wake transitions, append agent-attributed
+priority, add/remove tasks in your priorities, defer/move, apply snooze/wake transitions, append agent-attributed
 journal notes, check todos and complete tasks. No hosted service and no npm dependencies.
 
 - **Same code as the app.** Every change is made by the Planner UI's own
@@ -78,6 +78,7 @@ avoid duplicates. Use one `operationId` per intended change (16-120 of
 | `get_task` | `taskId`, `journalChars?` | read only; journal tail and todos with `index` |
 | `add_task` | `title`, `priority?`, `section?`, `parentId?`, `operationId`, `timeZone` | ID allocated like the app; an active task with the same title is returned instead of duplicated |
 | `set_priority` | `taskId`, `priority`, `operationId` | 🔴 🟡 🔵 ⚪ 🐸 📖 |
+| `set_prioritized` | `taskId`, `prioritized` (boolean), `operationId` | Adds to the end of your priorities or removes membership using the app's mutations; does not change urgency. Retries do not duplicate list entries. |
 | `move_task` | `taskId`, `to`, `wakeOn?`, `operationId`, `timeZone` | `wakeOn` defers until a date |
 | `apply_snooze_transitions` | `asOf`, `operationId` | Applies the UI's overdue and future snooze transitions for an explicit local date |
 | `append_journal` | `taskId`, `text`, `author`, `operationId`, `timeZone` | agent bubble; creates the journal if missing; a hidden `planner-op` marker makes retries exact |

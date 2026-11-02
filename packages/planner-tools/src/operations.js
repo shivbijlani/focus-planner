@@ -21,6 +21,7 @@ import {
   opCompleteTask,
   opMoveBetweenSections,
   opSetTaskPriority,
+  opSetTaskPrioritized,
   opSnoozeTask,
   taskIdFromCell,
 } from '../../../src/focusPlanOps.js'
@@ -367,6 +368,25 @@ const moveTask = {
   },
 }
 
+const setPrioritized = {
+  needs: () => [BOARD],
+  compute(args, snapshots) {
+    operationIdArg(args.operationId)
+    const taskId = taskIdArg(args.taskId)
+    requireValue(typeof args.prioritized === 'boolean', 'prioritized must be true or false.')
+    const board = requireBoard(snapshots)
+    if (!oneTask(board, taskId)) throw new ToolError('TASK_NOT_FOUND', `Task ${taskId} is not on the board.`)
+    const next = opSetTaskPrioritized(board, taskId, args.prioritized)
+    return {
+      result: { taskId, prioritized: args.prioritized },
+      writes: next === board ? [] : [{
+        name: BOARD, content: next,
+        purpose: `${args.prioritized ? 'Add' : 'Remove'} task ${taskId} ${args.prioritized ? 'to' : 'from'} your priorities`,
+      }],
+    }
+  },
+}
+
 const applySnoozeTransitions = {
   needs: () => [BOARD],
   compute(args, snapshots) {
@@ -499,6 +519,7 @@ export const OPERATIONS = {
   get_task: getTask,
   add_task: addTask,
   set_priority: setPriority,
+  set_prioritized: setPrioritized,
   move_task: moveTask,
   apply_snooze_transitions: applySnoozeTransitions,
   append_journal: appendJournal,

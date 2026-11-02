@@ -25,6 +25,19 @@ describe('release archive', () => {
         input: JSON.stringify({ tool: 'find_tasks', arguments: { query: 'hotel' }, snapshots: { 'planner.md': { content: BOARD, id: 'a', etag: 'b' } } }),
       })
       expect(JSON.parse(out.stdout).result.tasks[0].id).toBe('33')
+      const prioritized = spawnSync(process.execPath, [bin, 'plan'], {
+        encoding: 'utf8', cwd: extract,
+        input: JSON.stringify({
+          tool: 'set_prioritized',
+          arguments: { taskId: '31', prioritized: true, operationId: 'test:2026-10-21:priority01' },
+          snapshots: { 'planner.md': { content: BOARD, id: 'a', etag: 'b' } },
+        }),
+      })
+      expect(prioritized.status).toBe(0)
+      expect(JSON.parse(prioritized.stdout)).toMatchObject({
+        state: 'write_required',
+        expectedResult: { taskId: '31', prioritized: true },
+      })
       const snooze = spawnSync(process.execPath, [bin, 'plan'], {
         encoding: 'utf8', cwd: extract,
         input: JSON.stringify({

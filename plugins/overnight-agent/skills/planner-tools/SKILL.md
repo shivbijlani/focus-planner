@@ -2,7 +2,7 @@
 name: planner-tools
 description: >-
   Changes Shiv's Focus Planner (OneDrive Apps/Focus Planner) without driving the web UI:
-  find tasks, add a task, set priority, defer/move, apply snooze/wake transitions, append an
+  find tasks, add a task, set urgency, add/remove a task in your priorities, defer/move, apply snooze/wake transitions, append an
   agent-attributed journal note, check a journal todo, or complete a task. Use whenever an agent needs to read or update
   planner tasks or journals from a chat, Muse, or a script. Runs the pinned planner-tools
   release (Node 22+), which uses the app's own mutation code and conditional OneDrive writes.
@@ -26,6 +26,12 @@ before extracting. Entry point after `tar -xzf`:
   Focus Planner app registration (client `4f22242f-c9a7-4a61-9208-8ca0e5ef8697`).
 
 ## Rules
+
+Use `set_priority` for the urgency icon. Use `set_prioritized` with
+`taskId`, `prioritized: true|false` and `operationId` for membership in your
+priorities. To add a new task there, call `add_task`, then `set_prioritized`
+with its returned ID. These are separate verified operations; list ordering
+and reordering are not exposed by this command.
 
 1. Call `find_tasks` first; confirm the task with the user when more than one matches.
 2. One `operationId` per intended change; reuse it unchanged on every retry.
