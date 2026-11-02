@@ -17,6 +17,6 @@
     "bound_at": "2020-01-01T12:00:00Z",
     "seen_ids": [],
     "pending_ids": [],
-    "observed_at": "{{UTC-6h}}"
+    "observed_at": "{{NOW-6h}}"
   }
 }

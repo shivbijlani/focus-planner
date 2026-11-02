@@ -21,6 +21,6 @@
     "pending_ids": [
       "NEW905"
     ],
-    "observed_at": "{{UTC-30m}}"
+    "observed_at": "{{NOW-30m}}"
   }
 }

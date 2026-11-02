@@ -6,7 +6,10 @@
 // in a minute's first second) was <STAMP+0m>, so four goldens flaked on every PR.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { makeNormalizer } from './normalize.mjs';
+import { expandTokens } from './fixture.mjs';
+import { jsonDateOrNull } from '../../../skills/overnight-agent/oa-state-lib/core/psdate.mjs';
 
 const pad = (n) => String(n).padStart(2, '0');
 const stampOf = (ms) => {
@@ -41,4 +44,25 @@ test('ISO timestamps keep their own bucketing (only minute stamps changed)', () 
   const t0 = base + 30000;
   const n = makeNormalizer({ t0, pathTokens: [] });
   assert.equal(n.text(new Date(t0 + 1000).toISOString()), '<NOW+0m>');
+});
+
+test('doc freshness fixture ages survive invariant rendering in summer, winter and DST transition days', () => {
+  const fixtures = [
+    ['mc-doc-binding', '905', -30],
+    ['mc-doc-channel-provenance', '921', -30],
+    ['mc-doc-channel-provenance', '922', -360],
+    ['mc-observe-bound-docs', '930', -360],
+    ['mc-observe-bound-docs', '931', -360],
+  ];
+  for (const [month, day] of [[0, 15], [6, 15], [2, 8], [10, 1]]) {
+    const t0 = new Date(2026, month, day, 12).getTime();
+    for (const [fixture, id, minutes] of fixtures) {
+      const source = readFileSync(new URL(`../fixtures/${fixture}/state/task-${id}.json`, import.meta.url), 'utf8');
+      const observedAt = JSON.parse(expandTokens(source, { t0, root: '' })).doc.observed_at;
+      assert.equal(Date.parse(observedAt) - t0, minutes * 60000);
+      const rendered = jsonDateOrNull(observedAt).toInvariantString();
+      const n = makeNormalizer({ t0, pathTokens: [] });
+      assert.equal(n.text(rendered), `<INVTIME${minutes}m>`, `${fixture}/${id} at ${new Date(t0).toISOString()}`);
+    }
+  }
 });
