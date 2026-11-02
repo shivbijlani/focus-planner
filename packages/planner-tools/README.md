@@ -151,6 +151,17 @@ return, with the same re-read/re-plan loop.
 - `add_task` is idempotent by title among active tasks.
 - External editors that strip `planner-op` markers lose retry protection for
   those notes.
+- The in-memory MCP acceptance scenario exercises the Muse broker protocol
+  without connecting to a real Planner account:
+
+  ```bash
+  npx vitest run packages/planner-tools/test/tools.test.js -t "Muse broker synthetic intake scenario"
+  ```
+
+  It creates a linked rollout checklist, defers a child, sets its priority,
+  appends and checks a journal todo, and verifies duplicate prevention and
+  guardrail preservation against a synthetic Graph app folder. This is not a
+  live Muse runtime test.
 - Tested with in-memory Graph fakes (including forced 412s, app-sync
   reconciliation of a stale replica, and guardrail attempts): `npx vitest run
   packages/planner-tools` in the repository.

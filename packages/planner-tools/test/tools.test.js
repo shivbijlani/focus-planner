@@ -262,6 +262,44 @@ async function runToPlan(client, tool, args) {
   }
 }
 
+async function runBrokerMcp(handle, client, tool, args) {
+  let snapshots = {}
+  let plannedResult
+
+  for (let id = 1; id <= 30; id++) {
+    const response = await handle({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: {
+        name: 'planner_plan',
+        arguments: { tool, arguments: args, snapshots },
+      },
+    })
+    if (response.error || response.result?.isError) {
+      throw new Error(response.result?.content?.[0]?.text ?? response.error?.message ?? 'MCP call failed.')
+    }
+
+    const plan = response.result.structuredContent
+    if (plan.state === 'read_required') {
+      for (const read of plan.reads) snapshots = { ...snapshots, [read.filename]: await client.read(read) }
+      continue
+    }
+    if (plan.state === 'write_required') {
+      plannedResult ??= plan.expectedResult
+      for (const write of plan.writes) {
+        const status = await client.write(write.filename, write.request)
+        if (status === 409 || status === 412) break
+      }
+      snapshots = {}
+      continue
+    }
+    return plannedResult ? { ...plan, result: plannedResult } : plan
+  }
+
+  throw new Error(`MCP operation ${tool} did not reach a verified result.`)
+}
+
 async function reconcile(local, g) {
   const result = await reconcileRecordsFile({
     path: 'planner.md',
@@ -352,6 +390,95 @@ describe('broker transport', () => {
     })
     const bad = await handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'planner_plan', arguments: { tool: 'nope' } } })
     expect(bad.result.isError).toBe(true)
+  })
+})
+
+describe('Muse broker synthetic intake scenario', () => {
+  it('creates a linked rollout checklist, defers one child and records its journal todo through MCP', async () => {
+    const { g, client } = setup()
+    const handle = protocol({ brokerMode: true })
+    const listing = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    expect(listing.result.tools.map(tool => tool.name)).toEqual(['planner_plan'])
+
+    const intake = await runBrokerMcp(handle, client, 'find_tasks', { query: 'Sydney rollout' })
+    expect(intake.result.total).toBe(0)
+
+    const checklist = await runBrokerMcp(handle, client, 'add_task', {
+      title: 'Sydney rollout launch checklist',
+      operationId: op(),
+      timeZone: TZ,
+    })
+    const checklistId = checklist.result.taskId
+
+    const children = []
+    for (const [title, priority] of [
+      ['Confirm partner data', '🟡'],
+      ['Draft rollout note', '🟡'],
+      ['Schedule readiness review', '⚪'],
+    ]) {
+      const created = await runBrokerMcp(handle, client, 'add_task', {
+        title,
+        priority,
+        parentId: checklistId,
+        operationId: op(),
+        timeZone: TZ,
+      })
+      children.push({ id: created.result.taskId, title })
+    }
+
+    await runBrokerMcp(handle, client, 'set_priority', {
+      taskId: children[2].id,
+      priority: '🟡',
+      operationId: op(),
+    })
+    await runBrokerMcp(handle, client, 'move_task', {
+      taskId: children[1].id,
+      to: 'Deferred',
+      wakeOn: '2026-11-10',
+      operationId: op(),
+      timeZone: TZ,
+    })
+    await runBrokerMcp(handle, client, 'append_journal', {
+      taskId: checklistId,
+      text: '- TODO: Confirm the partner data owner.',
+      author: 'muse',
+      operationId: op(),
+      timeZone: TZ,
+    })
+
+    const duplicate = await runBrokerMcp(handle, client, 'add_task', {
+      title: 'Sydney rollout launch checklist',
+      operationId: op(),
+      timeZone: TZ,
+    })
+    expect(duplicate.result).toMatchObject({ taskId: checklistId, created: false })
+
+    const board = await runBrokerMcp(handle, client, 'find_tasks', {})
+    expect(board.result.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: checklistId, title: 'Sydney rollout launch checklist' }),
+      expect.objectContaining({ id: children[0].id, parentId: checklistId, title: 'Confirm partner data' }),
+      expect.objectContaining({ id: children[1].id, parentId: checklistId, section: 'Deferred', wake: '2026-11-10', title: 'Draft rollout note' }),
+      expect.objectContaining({ id: children[2].id, parentId: checklistId, priority: '🟡', title: 'Schedule readiness review' }),
+    ]))
+
+    const journal = await runBrokerMcp(handle, client, 'get_task', { taskId: checklistId })
+    expect(journal.result.journal.todos).toEqual([
+      { index: 0, text: 'Confirm the partner data owner.', done: false },
+    ])
+    await runBrokerMcp(handle, client, 'set_todo', {
+      taskId: checklistId,
+      todoIndex: 0,
+      todoText: 'Confirm the partner data owner.',
+      done: true,
+      operationId: op(),
+    })
+    const verifiedJournal = await runBrokerMcp(handle, client, 'get_task', { taskId: checklistId })
+    expect(verifiedJournal.result.journal.todos).toEqual([
+      { index: 0, text: 'Confirm the partner data owner.', done: true },
+    ])
+
+    expect(g.read('agent-gate.md')).toBe('# human-owned gate\n')
+    expect(g.read('user-settings.md')).toBeNull()
   })
 })
 
