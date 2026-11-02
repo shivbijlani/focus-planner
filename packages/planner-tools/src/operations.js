@@ -392,9 +392,13 @@ const applySnoozeTransitions = {
   compute(args, snapshots) {
     operationIdArg(args.operationId)
     const asOf = dateArg(args.asOf, 'asOf')
+    const taskId = args.taskId === undefined ? null : taskIdArg(args.taskId)
     const board = requireBoard(snapshots)
+    if (taskId !== null && !oneTask(board, taskId)) {
+      throw new ToolError('TASK_NOT_FOUND', `Task ${taskId} is not on the board.`)
+    }
     const before = listBoardTasks(board)
-    const next = opApplySnoozeTransitions(board, asOf)
+    const next = opApplySnoozeTransitions(board, asOf, taskId)
     const afterById = new Map(listBoardTasks(next).map(task => [task.id, task]))
     const wokeTaskIds = []
     const deferredTaskIds = []

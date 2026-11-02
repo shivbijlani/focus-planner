@@ -188,6 +188,82 @@ describe('your priorities membership', () => {
 })
 
 describe('apply_snooze_transitions', () => {
+  it('runs before/on-date checks for one task without moving unrelated due or future tasks', async () => {
+    const board = BOARD
+      .replace('| 31 | 🔴 | Book flights | - | 2026-10-02 | 30 |',
+        '| 31 | 🔴 | Book flights | - | 2026-10-02 | 30 | <!-- snooze:2026-10-25 -->')
+      .replace('| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |', [
+        '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-21 | 31 |',
+        '| 34 | 🟡 | Unrelated due task | - | 2026-10-03 | 2026-10-19 | 30 |',
+      ].join('\n'))
+    const { g, run } = setup({ 'planner.md': board })
+    const before = await run('apply_snooze_transitions', { taskId: '33', asOf: '2026-10-20', operationId: op() })
+    expect(before.result).toEqual({ asOf: '2026-10-20', wokeTaskIds: [], deferredTaskIds: [] })
+    expect(g.read('planner.md')).toBe(board)
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(0)
+
+    const args = { taskId: '33', asOf: '2026-10-21', operationId: op() }
+    const due = await run('apply_snooze_transitions', args)
+    expect(due.result).toEqual({ asOf: '2026-10-21', wokeTaskIds: ['33'], deferredTaskIds: [] })
+    expect(g.read('planner.md')).toContain('| 33 | ⚪ | Hotel research | - | 2026-10-03 | 31 |')
+    expect(g.read('planner.md')).toContain('| 31 | 🔴 | Book flights | - | 2026-10-02 | 30 | <!-- snooze:2026-10-25 -->')
+    expect(g.read('planner.md')).toContain('| 34 | 🟡 | Unrelated due task | - | 2026-10-03 | 2026-10-19 | 30 |')
+    await run('apply_snooze_transitions', args)
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(1)
+    expect(g.read('agent-gate.md')).toBe('# human-owned gate\n')
+  })
+
+  it('fails closed on invalid, missing or duplicate scoped IDs before planning writes', async () => {
+    const { g, run } = setup()
+    for (const taskId of [null, '', 'agent-gate.md']) {
+      await expect(run('apply_snooze_transitions', { taskId, asOf: '2026-10-21', operationId: op() }))
+        .rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    }
+    await expect(run('apply_snooze_transitions', { taskId: '999', asOf: '2026-10-21', operationId: op() }))
+      .rejects.toMatchObject({ code: 'TASK_NOT_FOUND' })
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(0)
+    const duplicate = setup({ 'planner.md': BOARD.replace('| 32 | 🟡 | Pack |', '| 31 | 🟡 | Pack |') })
+    await expect(duplicate.run('apply_snooze_transitions', { taskId: '31', asOf: '2026-10-21', operationId: op() }))
+      .rejects.toMatchObject({ code: 'DUPLICATE_TASK_ID' })
+    expect(duplicate.g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(0)
+  })
+
+  it('exposes scoped transitions through direct and broker MCP and preserves concurrent edits on reapply', async () => {
+    const board = BOARD.replace('| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |',
+      '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-21 | 31 |')
+    const { g, client } = setup({ 'planner.md': board })
+    const direct = protocol({ client })
+    const listing = await direct({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    expect(listing.result.tools.find(tool => tool.name === 'apply_snooze_transitions').inputSchema.properties.taskId)
+      .toMatchObject({ type: 'string', pattern: '^\\d{1,6}$' })
+    const before = await direct({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+      name: 'apply_snooze_transitions', arguments: { taskId: '33', asOf: '2026-10-20', operationId: op() },
+    } })
+    expect(before.result.structuredContent).toMatchObject({ state: 'already_applied', result: { wokeTaskIds: [] } })
+    g.state.beforeWrite = ({ files, put }) => {
+      put('planner.md', files.get('planner.md').content
+        .replace('| 30 | 🟡 | Plan the trip |', '| 30 | 🔴 | Plan the trip |')
+        .replace('| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-21 | 31 |', [
+          '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-21 | 31 |',
+          '| 34 | 🟡 | Concurrent due task | - | 2026-10-03 | 2026-10-19 | 30 |',
+        ].join('\n')))
+    }
+    const due = await direct({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+      name: 'apply_snooze_transitions', arguments: { taskId: '33', asOf: '2026-10-21', operationId: op() },
+    } })
+    expect(due.result.structuredContent).toMatchObject({
+      state: 'already_applied', result: { wokeTaskIds: ['33'], deferredTaskIds: [] },
+    })
+    expect(g.read('planner.md')).toContain('| 30 | 🔴 | Plan the trip |')
+    expect(g.read('planner.md')).toContain('| 34 | 🟡 | Concurrent due task | - | 2026-10-03 | 2026-10-19 | 30 |')
+    expect(g.state.calls.filter(call => call.method === 'PUT')).toHaveLength(2)
+    expect(g.state.calls.filter(call => call.method === 'PUT').every(call => call.headers['If-Match'])).toBe(true)
+    const verified = await runBrokerMcp(protocol({ brokerMode: true }), client, 'apply_snooze_transitions', {
+      taskId: '33', asOf: '2026-10-21', operationId: op(),
+    })
+    expect(verified).toMatchObject({ state: 'already_applied', result: { wokeTaskIds: [], deferredTaskIds: [] } })
+  })
+
   it('uses the UI transition rules, returns exact affected IDs, and leaves future snoozes alone', async () => {
     const board = BOARD
       .replace('| 31 | 🔴 | Book flights | - | 2026-10-02 | 30 |', '| 31 | 🔴 | Book flights | - | 2026-10-02 | 30 | <!-- snooze:2026-10-25 -->')

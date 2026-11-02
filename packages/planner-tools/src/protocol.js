@@ -58,9 +58,9 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'apply_snooze_transitions',
-    description: 'Apply the Planner UI snooze rules to the board as of an explicit local date. Expired Deferred tasks return to Today; future-dated snoozes misplaced in Today move to Deferred.',
+    description: 'Apply the Planner UI snooze rules as of an explicit local date. Expired Deferred tasks return to Today; future-dated snoozes misplaced in Today move to Deferred. Pass taskId to affect only that task; omitting it applies transitions to the entire board. Use taskId for isolated live tests with a simulated date.',
     inputSchema: { type: 'object', additionalProperties: false, required: ['asOf', 'operationId'], properties: {
-      asOf: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'The planner owner\'s local calendar date, YYYY-MM-DD.' }, operationId,
+      asOf: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'The planner owner\'s local calendar date, YYYY-MM-DD.' }, taskId, operationId,
     } },
     annotations: mutation,
   },

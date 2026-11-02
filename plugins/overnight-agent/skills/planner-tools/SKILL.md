@@ -33,6 +33,12 @@ priorities. To add a new task there, call `add_task`, then `set_prioritized`
 with its returned ID. These are separate verified operations; list ordering
 and reordering are not exposed by this command.
 
+For snooze/wake verification, first verify the installed tool schema advertises
+`taskId` on `apply_snooze_transitions`; do not assume an older tool honors it.
+Call it with the dedicated test `taskId` and explicit `asOf` date. This confines transitions to that task,
+including on conflict reapply. Omitting `taskId` applies transitions board-wide;
+never use a simulated future date board-wide against the actual Planner.
+
 1. Call `find_tasks` first; confirm the task with the user when more than one matches.
 2. One `operationId` per intended change; reuse it unchanged on every retry.
 3. Pass `timeZone: "America/Los_Angeles"` on changes for Shiv.

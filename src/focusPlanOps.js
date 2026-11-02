@@ -444,7 +444,7 @@ export function opSnoozeTask(content, rawLine, snoozeUntil) {
   return lines.join('\n')
 }
 
-export function opApplySnoozeTransitions(content, today) {
+export function opApplySnoozeTransitions(content, today, taskId = null) {
   let updated = content
   const lines = content.split('\n')
   let section = null
@@ -465,6 +465,7 @@ export function opApplySnoozeTransitions(content, today) {
       continue
     }
     if (cells.every(c => /^[-:]+$/.test(c))) continue
+    if (taskId !== null && taskIdFromCell(cells[0]) !== String(taskId)) continue
     const snoozeUntil = parseSnoozeUntil(trimmed, headers)
     if (!snoozeUntil) continue
     if (section === 'Deferred' && !isSnoozeActive(snoozeUntil, today)) {

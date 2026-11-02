@@ -80,7 +80,7 @@ avoid duplicates. Use one `operationId` per intended change (16-120 of
 | `set_priority` | `taskId`, `priority`, `operationId` | 🔴 🟡 🔵 ⚪ 🐸 📖 |
 | `set_prioritized` | `taskId`, `prioritized` (boolean), `operationId` | Adds to the end of your priorities or removes membership using the app's mutations; does not change urgency. Retries do not duplicate list entries. |
 | `move_task` | `taskId`, `to`, `wakeOn?`, `operationId`, `timeZone` | `wakeOn` defers until a date |
-| `apply_snooze_transitions` | `asOf`, `operationId` | Applies the UI's overdue and future snooze transitions for an explicit local date |
+| `apply_snooze_transitions` | `asOf`, `operationId`, optional `taskId` | Applies the UI's overdue and future snooze transitions for an explicit local date. With `taskId`, affects only that task; otherwise applies board-wide. Always scope simulated-date live tests to a dedicated test task. |
 | `append_journal` | `taskId`, `text`, `author`, `operationId`, `timeZone` | agent bubble; creates the journal if missing; a hidden `planner-op` marker makes retries exact |
 | `set_todo` | `taskId`, `todoIndex`, `todoText`, `done`, `operationId` | index + exact text from `get_task` |
 | `complete_task` | `taskId`, `outcome?`, `comment?`, `author?`, `operationId`, `timeZone` | archives, removes, re-parents children; confirm with the user first |

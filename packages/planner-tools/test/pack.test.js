@@ -42,12 +42,15 @@ describe('release archive', () => {
         encoding: 'utf8', cwd: extract,
         input: JSON.stringify({
           tool: 'apply_snooze_transitions',
-          arguments: { asOf: '2026-10-21', operationId: 'test:2026-10-21:snooze001' },
+          arguments: { taskId: '33', asOf: '2026-10-21', operationId: 'test:2026-10-21:snooze001' },
           snapshots: {
             'planner.md': {
               content: BOARD.replace(
                 '| 33 | ⚪ | Hotel research | - | 2026-10-03 |  | 31 |',
-                '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-20 | 31 |',
+                [
+                  '| 33 | ⚪ | Hotel research | - | 2026-10-03 | 2026-10-20 | 31 |',
+                  '| 34 | 🟡 | Unrelated due task | - | 2026-10-03 | 2026-10-19 | 30 |',
+                ].join('\n'),
               ),
               id: 'a',
               etag: 'b',
@@ -59,6 +62,8 @@ describe('release archive', () => {
         state: 'write_required',
         expectedResult: { asOf: '2026-10-21', wokeTaskIds: ['33'], deferredTaskIds: [] },
       })
+      expect(JSON.parse(snooze.stdout).writes[0].request.body)
+        .toContain('| 34 | 🟡 | Unrelated due task | - | 2026-10-03 | 2026-10-19 | 30 |')
       // Docs tools run the shipped publisher and docs-core outside the repository.
       const docs = spawnSync(process.execPath, [bin, 'plan'], {
         encoding: 'utf8', cwd: extract,
