@@ -105,6 +105,22 @@ afterEach(() => {
 })
 
 describe('actual service worker: device + OneDrive + Google Drive', () => {
+  it('resumes a large restore across bounded pull batches without losing downloaded progress', async () => {
+    const cloud = clouds.get('onedrive')
+    cloud.files.set('a.md', 'first cloud file')
+    cloud.files.set('b.md', 'second cloud file')
+    cloud.onRead = async () => { vi.setSystemTime(Date.now() + 60_001) }
+    await cycle(['onedrive'])
+    expect((await readLocalSnapshot('a.md')).content).toBe('first cloud file')
+    expect((await readLocalSnapshot('b.md')).content).toBeNull()
+    expect(statuses.at(-1).state).toBe('syncing')
+    cloud.onRead = null
+    await cycle(['onedrive'])
+    expect((await readLocalSnapshot('b.md')).content).toBe('second cloud file')
+    await cycle(['onedrive'])
+    expect(statuses.at(-1).state).toBe('synced')
+  })
+
   it('does not resurrect queued deletions when a bulk cleanup exceeds the push budget', async () => {
     const cloud = clouds.get('onedrive')
     for (const name of ['a.log', 'b.log']) {

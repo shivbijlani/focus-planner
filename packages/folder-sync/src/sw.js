@@ -220,8 +220,19 @@ async function pushProvider(provider) {
   return { remoteList, remoteNames, complete }
 }
 
-async function pullProvider(provider, { remoteList, remoteNames }, reconcileDeletes = false) {
+async function pullProvider(provider, context, reconcileDeletes = false) {
+  const { remoteList, remoteNames } = context
   const pendingPush = new Set(await getPending(provider.id))
+  const startedAt = Date.now()
+  let pulled = 0
+  const outOfTime = () => {
+    if (pulled > 0 && Date.now() - startedAt > PULL_BUDGET_MS) {
+      context.complete = false
+      return true
+    }
+    pulled++
+    return false
+  }
 
   // 2) Pull: compare mtimes against the up-front listing, download newer. Files
   // we just created/updated in the push step are now tracked with an mtime >=
@@ -234,6 +245,7 @@ async function pullProvider(provider, { remoteList, remoteNames }, reconcileDele
     if (!remoteNames.has(item.name) || pendingPush.has(item.name) || await isQueued(item.name)) continue
     const codec = RECORD_CODECS[item.name]
     if (codec) {
+      if (outOfTime()) return
       await reconcileRecord(provider, item.name, codec)
       await setRemoteMtime(provider.id, item.name, item.mtime)
       continue
@@ -247,6 +259,7 @@ async function pullProvider(provider, { remoteList, remoteNames }, reconcileDele
     const snapshot = await readLocalSnapshot(item.name)
     const localPresent = snapshot.content != null
     if (!shouldPullRemote({ lastSeen, remoteMtime: item.mtime, localPresent })) continue
+    if (outOfTime()) return
     const remoteContent = await provider.readRemote(provider, item.name)
     if (remoteContent != null) {
       if (snapshot.content != null && snapshot.content !== remoteContent) {
@@ -416,6 +429,7 @@ async function trackedRemoteNames(providerId) {
 // browser stops a service worker event after about 5 minutes; a first-contact
 // seed of a large folder can take longer, so it is spread over several cycles.
 const PUSH_BUDGET_MS = 60_000
+const PULL_BUDGET_MS = 60_000
 
 async function getPending(providerId) {
   const v = await idbGet(META_STORE, pendingKey(providerId))

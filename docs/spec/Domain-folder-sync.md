@@ -101,6 +101,10 @@ the open app. Registering Background Sync alone is insufficient: browsers can
 defer that event even after registration succeeds. The durable registration
 remains a fallback if the worker is terminated. Completed or failed cycles do
 not trigger the app's immediate continuation.
+Cold restores also use a 60-second pull budget with saved per-file progress, so a
+large backup can be restored across worker events instead of relying on one
+unbounded download cycle. A budget-limited pull skips deletion reconciliation
+until a complete pass and continues to report syncing.
 
 ## Browser reset and cleanup
 
