@@ -102,6 +102,7 @@ export function createSyncEngine({ localAdapter, providers = [], deferLocalInit 
   let resolveLocalReady
   const localReady = new Promise(resolve => { resolveLocalReady = resolve })
   let preparingLocal = null
+  let followUpTimer = null
   function reportLocalError(error) {
     console.error('[folder-sync] local replica failed:', error)
     status = { ...status, state: 'error', error: error.message || String(error) }
@@ -123,6 +124,16 @@ export function createSyncEngine({ localAdapter, providers = [], deferLocalInit 
       // message is easily missed on mobile/background. Replay the mirror into
       // the active store so pulled files (e.g. journals) actually surface.
       const newStatus = evt.data.status || {}
+      clearTimeout(followUpTimer)
+      followUpTimer = null
+      // Background Sync registration is durable, not an immediate scheduler.
+      // Keep budget-limited batches moving while an app window is still open.
+      if (newStatus.lastSync && newStatus.state === 'syncing') {
+        followUpTimer = setTimeout(() => {
+          followUpTimer = null
+          nudgeSW('pending').catch(reportLocalError)
+        }, 1000)
+      }
       if (newStatus.lastSync && newStatus.lastSync !== prev.lastSync) {
         reconcileMirrorToLocal().catch(() => {})
       }

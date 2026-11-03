@@ -96,6 +96,11 @@ The pull phase skips files just deleted by the push phase and files with pending
 local edits or deletions. In particular, when bulk deletion exceeds the push
 budget, unprocessed tombstones must survive until the next cycle, not be replaced
 by their still-existing cloud copies.
+Budget-limited batches also schedule an immediate continuation in the worker and
+the open app. Registering Background Sync alone is insufficient: browsers can
+defer that event even after registration succeeds. The durable registration
+remains a fallback if the worker is terminated. Completed or failed cycles do
+not trigger the app's immediate continuation.
 
 ## Browser reset and cleanup
 

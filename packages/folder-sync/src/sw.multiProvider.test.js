@@ -124,6 +124,8 @@ describe('actual service worker: device + OneDrive + Google Drive', () => {
     expect(statuses.at(-1).state).toBe('syncing')
     expect(await idbGet('meta', 'pending:onedrive')).toEqual(['b.log'])
     cloud.onDelete = null
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(statuses.filter(status => status.state === 'syncing' && !status.lastSync)).toHaveLength(2)
     await cycle(['onedrive'])
     expect(cloud.files.size).toBe(0)
     expect(statuses.at(-1).state).toBe('synced')

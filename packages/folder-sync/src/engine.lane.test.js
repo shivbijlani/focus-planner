@@ -56,6 +56,34 @@ describe('engine: local writes and the mirror replay share one lane (#826)', () 
     vi.unstubAllGlobals()
   })
 
+  it('continues a budget-limited batch without waiting for browser Background Sync scheduling', async () => {
+    let channel
+    vi.stubGlobal('BroadcastChannel', class { constructor() { channel = this } })
+    const postMessage = vi.fn()
+    vi.stubGlobal('navigator', { serviceWorker: {
+      addEventListener() {},
+      getRegistrations: async () => [{ scope: 'https://planner.test/folder-sync/', active: { postMessage } }],
+    } })
+    vi.stubGlobal('localStorage', { getItem: () => '["onedrive"]' })
+    const engine = createSyncEngine({ localAdapter: adapter(), providers: [{ id: 'onedrive', clientId: 'test' }], redirectUri: '' })
+    await engine.initLocal()
+    await vi.advanceTimersByTimeAsync(900)
+    postMessage.mockClear()
+    channel.onmessage({ data: { type: 'status', status: {
+      state: 'syncing', lastSync: 1, providers: { onedrive: { connected: true, state: 'syncing', pending: 814 } },
+    } } })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(postMessage).toHaveBeenCalledWith({ type: 'sync', reason: 'pending', providers: [{ id: 'onedrive', clientId: 'test' }] })
+    postMessage.mockClear()
+    channel.onmessage({ data: { type: 'status', status: { state: 'syncing', lastSync: 2 } } })
+    channel.onmessage({ data: { type: 'status', status: { state: 'synced', lastSync: 3 } } })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(postMessage).not.toHaveBeenCalled()
+    channel.onmessage({ data: { type: 'status', status: { state: 'error', lastSync: 4, error: 'rate limited' } } })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(postMessage).not.toHaveBeenCalled()
+  })
+
   it('a replay that fires mid-write cannot restore the old content', async () => {
     const local = adapter()
     local.files.set('planner.md', 'OLD')

@@ -117,11 +117,11 @@ async function runSync(reason) {
             : { connected: true, state: 'syncing', error: null }
         } catch (e) { fail(p, e) }
       }
-      const queued = (await peekAll()).length
+      const queued = await peekAll()
       for (const p of currentProviders) {
         const ps = providerStatuses[p.id]
         if (!ps) continue
-        ps.pending = (await getPending(p.id)).length + queued
+        ps.pending = new Set([...(await getPending(p.id)), ...queued]).size
         if (ps.state === 'synced' && ps.pending > 0) ps.state = 'syncing'
       }
       const states = Object.values(providerStatuses).map(s => s.state)
@@ -131,7 +131,7 @@ async function runSync(reason) {
           : states.every(s => s === 'synced') ? 'synced' : 'syncing'
       await broadcast({ state: overall, lastSync: Date.now(), providers: providerStatuses, reason })
       // A push budget ran out: schedule another cycle to keep draining.
-      if ([...contexts.values()].some(c => !c.complete) || queued) scheduleFollowUp()
+      if (overall === 'syncing') scheduleFollowUp()
     } finally {
       inFlight = null
     }
@@ -145,10 +145,11 @@ function scheduleFollowUp() {
   followUpScheduled = true
   const reg = self.registration
   if (reg && reg.sync && typeof reg.sync.register === 'function') {
-    reg.sync.register('folder-sync').catch(() => setTimeout(() => runSync('follow-up'), 1000))
-  } else {
-    setTimeout(() => runSync('follow-up'), 1000)
+    reg.sync.register('folder-sync').catch(error => console.warn('[folder-sync sw] background retry registration failed:', error))
   }
+  // Browsers may defer a successfully registered background event for minutes.
+  // Try immediately too; the durable registration covers worker termination.
+  setTimeout(() => runSync('follow-up').catch(error => console.error('[folder-sync sw] follow-up failed:', error)), 1000)
 }
 
 async function pushProvider(provider) {
