@@ -40,6 +40,12 @@ self.addEventListener('message', (evt) => {
       resetPaused = true
       try {
         await inFlight
+        const remainingClients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
+        if (remainingClients.some(client => client.id !== evt.source.id)) {
+          resetPaused = false
+          evt.ports[0]?.postMessage({ error: 'Another Planner or Docs window opened while backup stopped. Close it and retry.' })
+          return
+        }
         currentProviders = []
         evt.ports[0]?.postMessage({ paused: true })
       } catch (error) {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearBrowserDatabase, isPlannerStorageKey, resetBrowser, RESET_KEY } from './reset.js'
 
 async function database(name, store, action) {
@@ -30,8 +30,34 @@ beforeEach(async () => {
   await put('keyval-store', 'keyval', 'focus-planner-dir-handle:s1', { handle: true })
   await put('keyval-store', 'keyval', 'unrelated', 'keep')
 })
+afterEach(() => vi.restoreAllMocks())
 
 describe('browser reset', () => {
+  it('can reset full legacy localStorage, but frees no space before backup confirms it stopped', async () => {
+    localStorage.setItem('fp-file:legacy.md', 'legacy data filling the quota')
+    const setItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (key === RESET_KEY && this.getItem('fp-file:legacy.md')) {
+        throw new DOMException('Storage full', 'QuotaExceededError')
+      }
+      return setItem.call(this, key, value)
+    })
+    const serviceWorker = { getRegistrations: async () => [{
+      scope: 'https://planner.test/folder-sync/', active: {}, unregister: async () => true,
+    }] }
+    await expect(resetBrowser({
+      serviceWorker,
+      pause: async () => { throw new Error('Other tab still open') },
+    })).rejects.toThrow('Other tab still open')
+    expect(localStorage.getItem('fp-file:legacy.md')).toBe('legacy data filling the quota')
+    await resetBrowser({ serviceWorker, pause: async () => {
+      expect(localStorage.getItem('fp-file:legacy.md')).toBe('legacy data filling the quota')
+      expect(await keys('focus-planner', 'files')).toEqual(['planner.md'])
+    } })
+    expect(Object.keys(localStorage)).toEqual([])
+    expect(await keys('focus-planner', 'files')).toEqual([])
+  })
+
   it('clears only planner preferences and local databases after the worker stops, never a remote provider', async () => {
     localStorage.setItem('fp-file:legacy.md', 'old')
     localStorage.setItem('folder-sync:intended-providers', '["onedrive"]')

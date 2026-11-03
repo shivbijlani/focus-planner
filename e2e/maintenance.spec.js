@@ -51,13 +51,14 @@ test('reset refuses other tabs, then clears browser files and sign-in state with
   const other = await context.newPage()
   await openPlanner(other)
   const dialog = await settings(page)
-  await dialog.getByRole('link', { name: 'Reset this browser...' }).click()
-  await expect(page.getByRole('heading', { name: 'Reset this browser' })).toBeVisible()
-  const reset = page.getByRole('button', { name: 'Clear browser data and sign out' })
-  await expect(reset).toBeDisabled()
-  await page.getByRole('checkbox').check()
-  await reset.click()
+  page.once('dialog', dialog => dialog.dismiss())
+  await dialog.getByRole('button', { name: 'Reset & sign out' }).click()
+  await expect(dialog).toBeVisible()
+  expect(await readFile(page, 'journal/task-1.md')).toBe('# Unsynced journal')
+  page.once('dialog', dialog => dialog.accept())
+  await dialog.getByRole('button', { name: 'Reset & sign out' }).click()
   await expect(page.getByRole('status')).toContainText('Close other Planner')
+  const reset = page.getByRole('button', { name: 'Retry reset' })
   expect(await readFile(page, 'journal/task-1.md')).toBe('# Unsynced journal')
   await other.close()
   await page.evaluate(async () => {
@@ -80,6 +81,7 @@ test('reset refuses other tabs, then clears browser files and sign-in state with
   page.on('request', request => {
     if (/graph.microsoft.com|googleapis.com/.test(request.url())) remoteRequests.push(request.method())
   })
+  page.once('dialog', dialog => dialog.accept())
   await reset.click()
   await waitForBoard(page)
   expect(await listFiles(page)).not.toContain('journal/task-1.md')
@@ -93,4 +95,27 @@ test('reset refuses other tabs, then clears browser files and sign-in state with
   await expect(current.locator('.sync-target-card', { hasText: 'OneDrive' })).toContainText('Not backed up')
   await expect(current.locator('.sync-target-card', { hasText: 'Google Drive' })).toContainText('Not backed up')
   expect(remoteRequests).toEqual([])
+})
+
+test('reset works when legacy files have filled the real browser localStorage quota', async ({ page }) => {
+  await openPlanner(page)
+  await writeFile(page, 'journal/task-9.md', '# Local journal')
+  const dialog = await settings(page)
+  const error = await page.evaluate(() => {
+    const key = 'fp-file:legacy.md'
+    const used = Object.keys(localStorage).reduce((sum, k) => sum + k.length + localStorage.getItem(k).length, 0)
+    localStorage.setItem(key, 'x'.repeat(5 * 1024 * 1024 - used - key.length - 8))
+    try { localStorage.setItem('planner.reset-in-progress', '1'); return null }
+    catch (error) { return error.name }
+  })
+  expect(error).toBe('QuotaExceededError')
+  const resetPageLoaded = page.waitForRequest(request => request.isNavigationRequest() && request.url().endsWith('/reset.html'))
+  const returnedToPlanner = page.waitForEvent('framenavigated', frame => frame === page.mainFrame() && new URL(frame.url()).pathname === '/')
+  page.once('dialog', dialog => dialog.accept())
+  await dialog.getByRole('button', { name: 'Reset & sign out' }).click()
+  await resetPageLoaded
+  await returnedToPlanner
+  await waitForBoard(page)
+  expect(await readFile(page, 'journal/task-9.md')).toBeNull()
+  expect(await page.evaluate(() => localStorage.getItem('fp-file:legacy.md'))).toBeNull()
 })

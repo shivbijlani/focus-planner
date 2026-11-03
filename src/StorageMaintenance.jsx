@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import * as storage from './storage/storage.js'
 import { cleanupCategory, downloadArchive, makeFileArchive } from './storage/fileCleanup.js'
+import { RESET_CONFIRMED_KEY, RESET_CONFIRMATION } from './storage/reset.js'
 
 export default function StorageMaintenance({ showClutter, onShowClutter, onDataChanged }) {
   const [candidates, setCandidates] = useState(null)
@@ -10,6 +11,16 @@ export default function StorageMaintenance({ showClutter, onShowClutter, onDataC
   const [message, setMessage] = useState('')
   const [archived, setArchived] = useState(false)
   const canList = typeof storage.getActiveProvider()?.listAllPaths === 'function'
+  const reset = () => {
+    if (!window.confirm(RESET_CONFIRMATION)) return
+    try {
+      sessionStorage.setItem(RESET_CONFIRMED_KEY, '1')
+      window.location.assign(`${import.meta.env.BASE_URL}reset.html`)
+    } catch (error) {
+      console.error('Could not start reset:', error)
+      setError(error.message || 'Could not start reset')
+    }
+  }
 
   const run = async action => {
     setBusy(true)
@@ -83,7 +94,7 @@ export default function StorageMaintenance({ showClutter, onShowClutter, onDataC
     {busy && <p role="status">Working...</p>}
     {message && <p role="status">{message}</p>}
     {error && <p role="alert" className="storage-footer-error">{error}</p>}
-    <p className="settings-dialog-subtle">Reset signs Planner out and clears only this browser, including unsynced files. Cloud backups and local folders are not deleted. Signing in restores whatever remains in the backup.</p>
-    <a className="storage-footer-btn sync-target-action" href={`${import.meta.env.BASE_URL}reset.html`}>Reset this browser...</a>
+    <p className="settings-dialog-subtle">Clear this browser and sign out. Cloud backups are kept.</p>
+    <button className="storage-footer-btn sync-target-action" disabled={busy} onClick={reset}>Reset &amp; sign out</button>
   </div>
 }

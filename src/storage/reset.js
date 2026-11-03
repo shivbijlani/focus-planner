@@ -1,4 +1,6 @@
 export const RESET_KEY = 'planner.reset-in-progress'
+export const RESET_CONFIRMED_KEY = 'planner.reset-confirmed'
+export const RESET_CONFIRMATION = 'Reset Planner and sign out? This clears this browser, including unsynced changes. Cloud backups and files on your computer are kept.'
 
 export function isPlannerStorageKey(key) {
   return /^(fp[-:]|focus-planner|planner[.:-]|folder-sync[:.-]|od_|gd_|onedrive_|google-drive_)/.test(key)
@@ -89,12 +91,23 @@ export async function resetBrowser({
   indexedDb = indexedDB,
   pause = pauseSyncWorker,
 } = {}) {
-  local.setItem(RESET_KEY, '1')
+  let markerNeedsSpace = false
+  try { local.setItem(RESET_KEY, '1') }
+  catch (error) {
+    if (error.name !== 'QuotaExceededError') throw error
+    markerNeedsSpace = true
+  }
   if (!serviceWorker) throw new Error('A service worker is required to stop backup safely. Nothing has been cleared.')
   const registrations = await serviceWorker.getRegistrations()
   const syncRegistration = registrations.find(r => new URL(r.scope).pathname.endsWith('/folder-sync/'))
     || await serviceWorker.register('./folder-sync/sw.js', { type: 'module', scope: './folder-sync/' })
   await pause(await activeWorker(syncRegistration))
+  // Legacy fp-file copies can fill localStorage completely. Only free their
+  // space after the worker has stopped and checked that no other app is open.
+  if (markerNeedsSpace) {
+    clearPreferences(local)
+    local.setItem(RESET_KEY, '1')
+  }
   if (!await syncRegistration.unregister()) throw new Error('Could not unregister the stopped backup worker. Retry reset.')
   // Never call engine.deleteFile/provider.remove: those propagate deletions to the cloud.
   await clearBrowserDatabase('folder-sync', indexedDb)

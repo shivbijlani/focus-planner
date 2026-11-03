@@ -121,8 +121,10 @@ Conflict copies, Docs, metadata, and live task journals are not bulk-cleanup
 candidates. A backup copy can contain unique edits, so naming is a review aid,
 not proof that its contents are redundant.
 
-**Reset this browser** opens a standalone page without an active app engine.
-The user explicitly acknowledges losing local-only data. The sync worker refuses
+**Reset & sign out** is a button in Settings with one short confirmation about
+losing local-only data and keeping cloud backups. After confirmation, a lightweight
+reset runner replaces the active app engine and shows progress, not another form
+or checklist. The sync worker refuses
 reset while another same-origin app window is open, stops accepting work, and
 acknowledges only after its current cycle settles. Only then is it unregistered
 and the browser's files, sync replicas, tokens, queue, folder handles, and scoped
@@ -130,6 +132,10 @@ preferences cleared. Reset never calls remote deletion APIs or deletes files in
 a connected local folder. Google and Microsoft sessions outside Planner remain
 signed in. A persistent reset marker prevents Planner or Docs from mounting
 during an incomplete reset; the reset page supports retry and surfaces failures.
+If legacy file copies fill localStorage so completely that the marker cannot be
+written, reset first stops the worker and checks again for other app windows.
+Only after that acknowledgement does it free planner-owned localStorage and
+write the marker. A refusal to stop backup leaves the legacy files untouched.
 
 After reset, signing in restores the existing remote contents, including clutter
 that was not deleted from that backup. Finish syncing cleanup deletions before
