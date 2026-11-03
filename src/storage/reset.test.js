@@ -50,11 +50,50 @@ describe('browser reset', () => {
       pause: async () => { throw new Error('Other tab still open') },
     })).rejects.toThrow('Other tab still open')
     expect(localStorage.getItem('fp-file:legacy.md')).toBe('legacy data filling the quota')
+    let pauseCalls = 0
     await resetBrowser({ serviceWorker, pause: async () => {
-      expect(localStorage.getItem('fp-file:legacy.md')).toBe('legacy data filling the quota')
+      pauseCalls += 1
+      if (pauseCalls === 1) {
+        expect(localStorage.getItem('fp-file:legacy.md')).toBe('legacy data filling the quota')
+        expect(localStorage.getItem(RESET_KEY)).toBeNull()
+      } else {
+        expect(localStorage.getItem('fp-file:legacy.md')).toBeNull()
+        expect(localStorage.getItem(RESET_KEY)).toBe('1')
+      }
       expect(await keys('focus-planner', 'files')).toEqual(['planner.md'])
     } })
+    expect(pauseCalls).toBe(2)
     expect(Object.keys(localStorage)).toEqual([])
+    expect(await keys('focus-planner', 'files')).toEqual([])
+  })
+
+  it('can retry when the post-marker client check refuses a full-storage reset', async () => {
+    localStorage.setItem('fp-file:legacy.md', 'legacy data filling the quota')
+    const setItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (key === RESET_KEY && this.getItem('fp-file:legacy.md')) {
+        throw new DOMException('Storage full', 'QuotaExceededError')
+      }
+      return setItem.call(this, key, value)
+    })
+    const unregister = vi.fn(async () => true)
+    const serviceWorker = { getRegistrations: async () => [{
+      scope: 'https://planner.test/folder-sync/', active: {}, unregister,
+    }] }
+    let pauseCalls = 0
+    await expect(resetBrowser({
+      serviceWorker,
+      pause: async () => {
+        pauseCalls += 1
+        if (pauseCalls === 2) throw new Error('Another Planner window opened')
+      },
+    })).rejects.toThrow('Another Planner window opened')
+    expect(unregister).not.toHaveBeenCalled()
+    expect(localStorage.getItem(RESET_KEY)).toBe('1')
+    expect(await keys('focus-planner', 'files')).toEqual(['planner.md'])
+
+    await resetBrowser({ serviceWorker, pause: async () => {} })
+    expect(unregister).toHaveBeenCalledOnce()
     expect(await keys('focus-planner', 'files')).toEqual([])
   })
 
@@ -76,6 +115,7 @@ describe('browser reset', () => {
       pause,
     })
     expect(pause).toHaveBeenCalledWith(worker)
+    expect(pause).toHaveBeenCalledTimes(2)
     expect(unregister).toHaveBeenCalledOnce()
     expect(await keys('focus-planner', 'files')).toEqual([])
     expect(await keys('folder-sync', 'meta')).toEqual([])

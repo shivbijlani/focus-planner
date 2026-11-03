@@ -108,6 +108,9 @@ export async function resetBrowser({
     clearPreferences(local)
     local.setItem(RESET_KEY, '1')
   }
+  // Recheck after the marker exists so a client that opened during marker
+  // recovery cannot keep writing while local databases are cleared.
+  await pause(await activeWorker(syncRegistration))
   if (!await syncRegistration.unregister()) throw new Error('Could not unregister the stopped backup worker. Retry reset.')
   // Never call engine.deleteFile/provider.remove: those propagate deletions to the cloud.
   await clearBrowserDatabase('folder-sync', indexedDb)

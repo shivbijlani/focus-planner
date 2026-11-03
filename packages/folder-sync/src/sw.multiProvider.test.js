@@ -189,6 +189,34 @@ describe('actual service worker: device + OneDrive + Google Drive', () => {
     expect(clouds.get('onedrive').files.get('note.md')).toBe('still running')
   })
 
+  it('blocks sync before the first reset client check settles', async () => {
+    await cycle(['onedrive'])
+    const cloud = clouds.get('onedrive')
+    cloud.files.set('junk.log', 'remote copy')
+    await idbSet('meta', 'mtime:onedrive:junk.log', 1)
+    await saveLocalReplica('junk.log', null)
+    await enqueue('junk.log')
+    let releaseClientCheck
+    const clientCheck = new Promise(resolve => { releaseClientCheck = resolve })
+    let clientChecks = 0
+    self.clients.matchAll = async () => {
+      clientChecks += 1
+      if (clientChecks === 1) await clientCheck
+      return [{ id: 'reset' }]
+    }
+    let stopping
+    const reply = vi.fn()
+    events.get('message')({
+      data: { type: 'pause-for-reset' }, source: { id: 'reset' }, ports: [{ postMessage: reply }],
+      waitUntil: promise => { stopping = promise },
+    })
+    await cycle(['onedrive'])
+    expect(cloud.files.get('junk.log')).toBe('remote copy')
+    releaseClientCheck()
+    await stopping
+    expect(reply).toHaveBeenCalledWith({ paused: true })
+  })
+
   it('acknowledges reset only after the in-flight cycle settles and blocks later nudges', async () => {
     self.clients.matchAll = async () => [{ id: 'reset', postMessage: () => {} }]
     let release, entered

@@ -31,24 +31,27 @@ self.addEventListener('message', (evt) => {
   const msg = evt.data
   if (!msg) return
   if (msg.type === 'pause-for-reset') {
+    const wasResetPaused = resetPaused
+    resetPaused = true
     evt.waitUntil((async () => {
-      const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
-      if (!evt.source?.id || clients.some(client => client.id !== evt.source.id)) {
-        evt.ports[0]?.postMessage({ error: 'Close other Planner and Docs tabs or installed windows, then retry.' })
-        return
-      }
-      resetPaused = true
       try {
+        const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
+        if (!evt.source?.id || clients.some(client => client.id !== evt.source.id)) {
+          resetPaused = wasResetPaused
+          evt.ports[0]?.postMessage({ error: 'Close other Planner and Docs tabs or installed windows, then retry.' })
+          return
+        }
         await inFlight
         const remainingClients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
         if (remainingClients.some(client => client.id !== evt.source.id)) {
-          resetPaused = false
+          resetPaused = wasResetPaused
           evt.ports[0]?.postMessage({ error: 'Another Planner or Docs window opened while backup stopped. Close it and retry.' })
           return
         }
         currentProviders = []
         evt.ports[0]?.postMessage({ paused: true })
       } catch (error) {
+        resetPaused = wasResetPaused
         evt.ports[0]?.postMessage({ error: `Backup did not stop cleanly: ${error.message}` })
       }
     })())
