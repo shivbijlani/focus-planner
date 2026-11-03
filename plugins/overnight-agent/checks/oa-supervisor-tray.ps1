@@ -111,6 +111,7 @@ Remove-Item -LiteralPath $files.stopRequest -Force -ErrorAction SilentlyContinue
 # a crash or an intentional restart always comes back supervising (GH #695).
 $tray = [ordered]@{
   paused = $false; state = 'STARTING'; error = $null; lastCheckUtc = $null
+  memory = $null
   nextEvaluationAt = (Get-Date).ToUniversalTime(); evaluating = $false
 }
 
@@ -141,6 +142,7 @@ function Write-Heartbeat {
       lastState = $tray.state; paused = $tray.paused; intervalMinutes = $IntervalMinutes
       nextEvaluationAt = $tray.nextEvaluationAt.ToString('o'); evaluating = $tray.evaluating
       error = $tray.error
+      memory = $tray.memory
       critical = (Get-OaCriticalStatus -Path $files.capabilities)
       browser = [ordered]@{
         state = $browser.state; summary = $browser.summary; paused = $browser.paused
@@ -328,6 +330,7 @@ function Invoke-ReliabilityCheck {
     if (-not $line) { throw "checker returned no JSON result (exit $exitCode): $($output.Trim())" }
     $result = $line | ConvertFrom-Json
     $tray.state = [string]$result.status
+    $tray.memory = $result.memory
     $tray.error = $(if ($result.status -eq 'failed') { [string]$result.error } else { $null })
     $next = $default
     if ($result.nextEvaluationAt) {
@@ -439,6 +442,11 @@ function Update-TrayIcon {
   $criticalItem.Text = if ($critical.down) { Limit-Text $critical.headline 120 } else { 'Critical tools: OK' }
   $icon.Icon = if ($critical.down) { [System.Drawing.SystemIcons]::Error } else { [System.Drawing.SystemIcons]::Application }
   $status = if ($tray.paused) { 'paused' } else { $tray.state.ToLowerInvariant() }
+  if ($tray.memory) {
+    $status += if ($tray.memory.error) { ' (memory check failed)' } else {
+      " (commit $([math]::Round($tray.memory.percent))%)"
+    }
+  }
   $browserStatus = if ($browser.paused) { 'paused' } elseif ($browser.process) { 'checking' } else { $browser.state.ToLowerInvariant() }
   # NotifyIcon.Text is limited to 63 characters.
   $icon.Text = if ($critical.down) { Limit-Text $critical.headline 63 } else {
@@ -510,12 +518,11 @@ $timer.add_Tick({
   }
   if (Step-BrowserWorkload) { Update-TrayIcon }
   if (Step-UpdateWorkload) { Update-TrayIcon }
-  if ($script:lastCriticalStamp -ne (if (Test-Path -LiteralPath $files.capabilities) {
+  $criticalStamp = if (Test-Path -LiteralPath $files.capabilities) {
     (Get-Item -LiteralPath $files.capabilities).LastWriteTimeUtc.Ticks
-  } else { 0 })) {
-    $script:lastCriticalStamp = if (Test-Path -LiteralPath $files.capabilities) {
-      (Get-Item -LiteralPath $files.capabilities).LastWriteTimeUtc.Ticks
-    } else { 0 }
+  } else { 0 }
+  if ($script:lastCriticalStamp -ne $criticalStamp) {
+    $script:lastCriticalStamp = $criticalStamp
     Update-TrayIcon
   }
 })
