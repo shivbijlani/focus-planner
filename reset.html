@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reset Planner</title>
+  </head>
+  <body>
+    <main>
+      <h1>Reset this browser</h1>
+      <p>This signs Planner out of both backup services and clears its browser files, offline sync queue, cached replicas, saved folder connections, and preferences.</p>
+      <p><strong>Unsynced changes and local-only files will be lost.</strong> Cloud backups and files in folders on your computer are not deleted. This does not sign you out of Google or Microsoft in other apps.</p>
+      <p>Signing in again restores files from that backup, including any clutter still stored there. Delete unwanted files separately before resetting, and wait for those deletions to finish backing up.</p>
+      <p>Close every other Planner and Docs tab or installed window before continuing.</p>
+      <label><input id="confirm" type="checkbox" /> I understand that local-only data will be lost.</label>
+      <p><button id="reset" disabled>Clear browser data and sign out</button> <a href="./">Cancel</a></p>
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="/src/resetPage.js"></script>
+  </body>
+</html>

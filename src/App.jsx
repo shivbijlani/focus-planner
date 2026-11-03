@@ -49,7 +49,8 @@ import LaneChip from './LaneChip.jsx'
 import LanesSettingsSection, { LanePicker } from './LanesSettings.jsx'
 import { LanesBoardContext, useLanes } from './useLanes.js'
 import { canonicalTaskId, laneView, readLaneBoard, resolveTaskLane } from './lanes/lanes.js'
-import { hideDocsFolder, hideAgentMetadataFolder } from './fileTreeFilter.js'
+import { hideDocsFolder, hideAgentMetadataFolder, hideSidebarClutter } from './fileTreeFilter.js'
+import StorageMaintenance from './StorageMaintenance.jsx'
 import { journalFilePresentation } from './fileTreePresentation.js'
 import { useTaskBriefing } from './taskBriefing.js'
 
@@ -4184,7 +4185,7 @@ function SettingsSectionTitle({ id, label, collapsed, onToggle, className = '' }
   )
 }
 
-function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
+function StorageFooter({ syncStatus, onDataChanged, onOpenFile, showClutter, onShowClutter }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
@@ -4561,6 +4562,13 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
               >
                 Open {AI_SETTINGS_FILE}
               </button>
+              <button
+                type="button"
+                className="storage-footer-btn sync-target-action"
+                onClick={() => { close(); onOpenFile?.(AGENT_GATE_FILE) }}
+              >
+                Open {AGENT_GATE_FILE}
+              </button>
             </div>
 
             {isMulti && (
@@ -4837,6 +4845,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
               </div>
             </div>
 
+            <StorageMaintenance showClutter={showClutter} onShowClutter={onShowClutter} onDataChanged={onDataChanged} />
             {error && <div className="storage-footer-error">⚠️ {error}</div>}
           </div>
         </div>,
@@ -4851,6 +4860,16 @@ function App() {
   // 'loading' | 'pick-storage' | 'ready'
   const [appState, setAppState] = useState('loading')
   const [files, setFiles] = useState([])
+  const [showClutter, setShowClutter] = useState(() => localStorage.getItem('fp-show-technical-files') === '1')
+  const changeShowClutter = value => {
+    try {
+      localStorage.setItem('fp-show-technical-files', value ? '1' : '0')
+      setShowClutter(value)
+    } catch (error) {
+      console.error('Could not save sidebar preference:', error)
+      window.alert(`Could not save sidebar preference: ${error.message}`)
+    }
+  }
   const [folderName, setFolderName] = useState('')
   const [, setStorageProvider] = useState('')
   const [syncStatus, setSyncStatus] = useState(storage.getSyncStatus())
@@ -5280,7 +5299,7 @@ function App() {
         </div>
         <div className="sidebar-file-tree">
           <FileTree
-            items={files}
+            items={showClutter ? files : hideSidebarClutter(files)}
             onSelect={handleSelectFile}
             selectedPath={selectedFile}
           />
@@ -5290,6 +5309,8 @@ function App() {
           syncStatus={syncStatus}
           onDataChanged={loadFiles}
           onOpenFile={handleSelectFile}
+          showClutter={showClutter}
+          onShowClutter={changeShowClutter}
         />
       </aside>
       <main ref={contentRef} className={`content${isJournal ? ' content-chat' : ''}`}>

@@ -6,8 +6,11 @@ import { DefaultHostProvider } from '#planner/host-provider'
 import './docs.css'
 import './standalone.css'
 import DocsApp from './DocsApp.jsx'
+import { RESET_KEY } from '../storage/reset.js'
 
-createRoot(document.getElementById('root')).render(
+if (localStorage.getItem(RESET_KEY)) {
+  window.location.replace(`${import.meta.env.BASE_URL}reset.html`)
+} else createRoot(document.getElementById('root')).render(
   <StrictMode>
     <DefaultHostProvider>
       <DocsApp />

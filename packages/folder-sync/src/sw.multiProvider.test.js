@@ -100,6 +100,57 @@ afterEach(() => {
 })
 
 describe('actual service worker: device + OneDrive + Google Drive', () => {
+  it('does not report backed up while a pull has queued changes for another pass', async () => {
+    clouds.get('onedrive').files.set('journal/task-1.md', '# Remote journal')
+    await cycle()
+    const last = statuses.at(-1)
+    expect(last.state).toBe('syncing')
+    expect(last.providers.onedrive.pending).toBeGreaterThan(0)
+    await cycle()
+    expect(statuses.at(-1).state).toBe('synced')
+    expect(statuses.at(-1).providers.onedrive.pending).toBe(0)
+  })
+
+  it('refuses reset while another app window can still write', async () => {
+    self.clients.matchAll = async () => [{ id: 'reset' }, { id: 'another-tab' }]
+    let work
+    const reply = vi.fn()
+    events.get('message')({
+      data: { type: 'pause-for-reset' }, source: { id: 'reset' }, ports: [{ postMessage: reply }],
+      waitUntil: promise => { work = promise },
+    })
+    await work
+    expect(reply.mock.calls[0][0].error).toContain('Close other')
+    await saveLocalReplica('note.md', 'still running', { importing: true })
+    await cycle()
+    expect(clouds.get('onedrive').files.get('note.md')).toBe('still running')
+  })
+
+  it('acknowledges reset only after the in-flight cycle settles and blocks later nudges', async () => {
+    self.clients.matchAll = async () => [{ id: 'reset', postMessage: () => {} }]
+    let release, entered
+    const reading = new Promise(resolve => { entered = resolve })
+    const blocked = new Promise(resolve => { release = resolve })
+    clouds.get('onedrive').files.set('note.md', 'cloud note')
+    clouds.get('onedrive').onRead = async () => { entered(); await blocked }
+    const syncing = cycle(['onedrive'])
+    await reading
+    let stopping
+    const reply = vi.fn()
+    events.get('message')({
+      data: { type: 'pause-for-reset' }, source: { id: 'reset' }, ports: [{ postMessage: reply }],
+      waitUntil: promise => { stopping = promise },
+    })
+    await Promise.resolve()
+    expect(reply).not.toHaveBeenCalled()
+    release()
+    await syncing
+    await stopping
+    expect(reply).toHaveBeenCalledWith({ paused: true })
+    const count = statuses.length
+    await cycle()
+    expect(statuses).toHaveLength(count)
+  })
   it.each([
     ['onedrive', 'google-drive'],
     ['google-drive', 'onedrive'],

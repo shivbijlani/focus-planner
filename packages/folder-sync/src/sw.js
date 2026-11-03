@@ -22,6 +22,7 @@ const PROVIDER_FACTORIES = {
 }
 
 let currentProviders = []
+let resetPaused = false
 
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (evt) => evt.waitUntil(self.clients.claim()))
@@ -29,7 +30,26 @@ self.addEventListener('activate', (evt) => evt.waitUntil(self.clients.claim()))
 self.addEventListener('message', (evt) => {
   const msg = evt.data
   if (!msg) return
+  if (msg.type === 'pause-for-reset') {
+    evt.waitUntil((async () => {
+      const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
+      if (!evt.source?.id || clients.some(client => client.id !== evt.source.id)) {
+        evt.ports[0]?.postMessage({ error: 'Close other Planner and Docs tabs or installed windows, then retry.' })
+        return
+      }
+      resetPaused = true
+      try {
+        await inFlight
+        currentProviders = []
+        evt.ports[0]?.postMessage({ paused: true })
+      } catch (error) {
+        evt.ports[0]?.postMessage({ error: `Backup did not stop cleanly: ${error.message}` })
+      }
+    })())
+    return
+  }
   if (msg.type === 'sync') {
+    if (resetPaused) return
     currentProviders = (msg.providers || []).map(p => {
       const factory = PROVIDER_FACTORIES[p.id]
       return factory ? factory({ clientId: p.clientId }) : null
@@ -48,6 +68,7 @@ self.addEventListener('periodicsync', (evt) => {
 
 let inFlight = null
 async function runSync(reason) {
+  if (resetPaused) return
   if (inFlight) return inFlight
   followUpScheduled = false
   inFlight = (async () => {
@@ -96,15 +117,21 @@ async function runSync(reason) {
             : { connected: true, state: 'syncing', error: null }
         } catch (e) { fail(p, e) }
       }
+      const queued = (await peekAll()).length
+      for (const p of currentProviders) {
+        const ps = providerStatuses[p.id]
+        if (!ps) continue
+        ps.pending = (await getPending(p.id)).length + queued
+        if (ps.state === 'synced' && ps.pending > 0) ps.state = 'syncing'
+      }
       const states = Object.values(providerStatuses).map(s => s.state)
       const overall = states.includes('reconnect-required')
         ? 'reconnect-required'
-        : states.every(s => s === 'synced')
-          ? 'synced'
-          : 'idle'
+        : states.includes('error') ? 'error'
+          : states.every(s => s === 'synced') ? 'synced' : 'syncing'
       await broadcast({ state: overall, lastSync: Date.now(), providers: providerStatuses, reason })
       // A push budget ran out: schedule another cycle to keep draining.
-      if ([...contexts.values()].some(c => !c.complete) || (await peekAll()).length) scheduleFollowUp()
+      if ([...contexts.values()].some(c => !c.complete) || queued) scheduleFollowUp()
     } finally {
       inFlight = null
     }
@@ -114,7 +141,7 @@ async function runSync(reason) {
 
 let followUpScheduled = false
 function scheduleFollowUp() {
-  if (followUpScheduled) return
+  if (resetPaused || followUpScheduled) return
   followUpScheduled = true
   const reg = self.registration
   if (reg && reg.sync && typeof reg.sync.register === 'function') {

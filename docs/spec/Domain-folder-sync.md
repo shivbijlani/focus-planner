@@ -82,6 +82,42 @@ The domain's behavioural spec comes from `packages/folder-sync/src/codecs/mdTabl
 - `packages/folder-sync/src/providerPush.test.js` requires every provider to receive each queued edit, per-provider pending names to carry over and dedupe, a first-contact seed ordered board files first, then edits, then other markdown, then other files, sidecars and unsyncable names to be dropped, and disconnect cleanup to select only that provider's mtime, pending and seed keys.
 - `packages/folder-sync/src/diagnosticVolume.test.js` requires summary diagnostics instead of one event per unchanged mirror file or per first-contact skip.
 
+## Backup status
+
+The UI reports a connected but not-yet-checked target as pending, not backed up. A
+cycle remains in progress while either its per-provider pending list or the shared
+queue contains work, including changes just pulled from another target. Settings
+shows the pending count returned at the end of each cycle.
+
+## Browser reset and cleanup
+
+Settings offers **Clean up & reset**. Technical files are hidden in the sidebar
+by default, with a reversible **Show technical files** preference. This is a
+presentation filter only: files continue to sync. Personal folders, journals,
+supporting task documents, and alternate boards remain visible.
+
+Browser Storage cleanup lists recognized Playwright output, named browser
+snapshots, and old `.bak`/`.backup` copies. Nothing is selected automatically.
+The user downloads an exact-content recovery archive before confirming deletion.
+Deletions use the normal sync path and therefore reach connected backups.
+Conflict copies, Docs, metadata, and live task journals are not bulk-cleanup
+candidates. A backup copy can contain unique edits, so naming is a review aid,
+not proof that its contents are redundant.
+
+**Reset this browser** opens a standalone page without an active app engine.
+The user explicitly acknowledges losing local-only data. The sync worker refuses
+reset while another same-origin app window is open, stops accepting work, and
+acknowledges only after its current cycle settles. Only then is it unregistered
+and the browser's files, sync replicas, tokens, queue, folder handles, and scoped
+preferences cleared. Reset never calls remote deletion APIs or deletes files in
+a connected local folder. Google and Microsoft sessions outside Planner remain
+signed in. A persistent reset marker prevents Planner or Docs from mounting
+during an incomplete reset; the reset page supports retry and surfaces failures.
+
+After reset, signing in restores the existing remote contents, including clutter
+that was not deleted from that backup. Finish syncing cleanup deletions before
+resetting. Clearing a browser is not a way to clean the cloud.
+
 ## Failure modes
 
 This domain treats silent data loss as the primary enemy. The failure modes named in code are: a stale device resurrects a deleted board row; an empty load is misread as a whole-board delete; an alive sidecar row with no parsed content crashes fingerprinting; a newly connected provider clobbers cloud data it has never seen; pagination hides journals in subfolders; and a poison filename blocks the queue forever because the remote rejects it. The consistent mitigation is to preserve evidence, prefer non-destructive interpretations, and keep the decision logic pure enough that the test suite can pin each branch directly.
