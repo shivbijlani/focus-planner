@@ -53,6 +53,7 @@ export const RELIABILITY_DEFAULTS = Object.freeze({
   hardIntervalHours: 4,
   quietWindowMinutes: 15,
   cooldownMinutes: 60,
+  memoryRecovery: false,
 });
 
 // Row name (normalized) -> how to read it. Adding a workload means adding a new
@@ -63,6 +64,7 @@ const RELIABILITY_ROWS = new Map([
   ['hard deadline n', { key: 'hardIntervalHours', kind: 'hours', min: 1, max: 170 }],
   ['quiet window', { key: 'quietWindowMinutes', kind: 'minutes', min: 5, max: 240 }],
   ['restart cooldown', { key: 'cooldownMinutes', kind: 'minutes', min: 1, max: 1440 }],
+  ['memory pressure recovery', { key: 'memoryRecovery', kind: 'switch' }],
 ]);
 
 // The browser-check workload (GH #698, simplified by GH #738) is a SIBLING

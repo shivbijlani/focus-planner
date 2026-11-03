@@ -437,6 +437,43 @@ your `user-settings.md` policy — re-running `-Enable` later picks the same pol
 Running the installer with **no switch** at any time only reports status (enabled? running?
 PID?) and changes nothing.
 
+### Optional memory-pressure recovery
+
+The existing M/N policy is time-based; it cannot protect a machine that exhausts
+virtual memory before M. Set `Memory pressure recovery` to `on` under
+`## Tray reliability supervision` in the external `user-settings.md` to enable a
+second trigger in the same reliability workload. It is **off by default** and
+does not add a process, startup route, or automatic plugin installation.
+
+The tray evaluates about once a minute (collection time is additional), using
+Windows **committed bytes / commit limit**, not free RAM or working set. Recovery
+requires the verified Copilot process tree to hold at least 1 GiB of private memory
+and at least 10% of total committed bytes. The sample records the five largest
+consumers for diagnosis; unrelated programs are never stopped.
+
+| Pressure | Action |
+| --- | --- |
+| Below 85%, or Copilot is not a major contributor | No memory-triggered restart |
+| At least 85% | Restart only with the existing verified quiet window |
+| At least 95% | May interrupt active sessions: request graceful close, wait up to 15 seconds, then use the existing identity-checked process-tree termination if pressure is still critical |
+
+Both thresholds need distinct observations spanning at least 60 seconds. Samples
+older than 90 seconds, gaps over 150 seconds, an app identity change, unreadable
+counters, or recovered pressure reset confirmation. Pressure and identity are checked
+again before shutdown and force. Memory recovery has a **10-minute cooldown** from
+any persisted restart intent, even a failed one; the configured restart cooldown
+continues to govern the M/N policy.
+
+It reuses the exclusive action lock, restart audit, exact-executable relaunch, and
+readiness/scheduler checks. The heartbeat exposes the memory reading or explicit
+inspection error; restart audits include counters, top consumers, and confirmation
+evidence. `-NoAct` observes but never restarts or advances confirmation. Turning the
+setting off restores the original cadence and time-based policy.
+
+This is mitigation, not a memory-leak fix or an uptime guarantee. Fast spikes,
+counter failures, or exhaustion during cooldown can still require manual recovery.
+It never changes Windows pagefile settings or reboots the machine.
+
 ### Troubleshooting the tray
 
 - **Is it installed and running?** `powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1` (no

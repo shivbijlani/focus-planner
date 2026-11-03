@@ -1587,6 +1587,27 @@ jobs:
   # runs on the nightly laptop is a guard that can rot. The mutation check drives the real sweep
   # file through its -FactsJson replay path, so it needs no daemon, no scheduled task and no
   # Windows, and runs unmodified here under pwsh.
+  supervisor-memory-recovery:
+    name: Supervisor memory recovery and tray
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Recovery thresholds, identity, cooldown and existing restart behavior
+        run: >-
+          node --test
+          plugins/overnight-agent/checks/memory-pressure.test.mjs
+          plugins/overnight-agent/checks/reliability-supervisor.tests.mjs
+          plugins/overnight-agent/checks/consumer-reliability-supervisor.test.mjs
+          plugins/overnight-agent/checks/windows-app-actuator.tests.mjs
+          plugins/overnight-agent/checks/oa-user-settings.test.mjs
+      - name: Packaged tray and real Windows Forms startup
+        shell: powershell
+        run: .\plugins\overnight-agent\checks\oa-reliability-tray.Tests.ps1
+
   supervisor-liveness:
     name: Supervisor liveness
     runs-on: ubuntu-latest

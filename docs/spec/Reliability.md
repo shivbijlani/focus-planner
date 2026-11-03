@@ -108,6 +108,14 @@ thing (or the other supervisor) it exists to catch failing. Full behavior, confi
 (`user-settings.md`), and troubleshooting live in `plugins/overnight-agent/README.md`; this page
 only records where it fits in the reliability stack.
 
+The same reliability workload also offers an independent, default-off **Memory
+pressure recovery** setting. Sustained system commit pressure attributable to the
+verified Copilot process tree can trigger recovery before M: high pressure still
+requires quiet, while critical pressure permits an interruption with bounded graceful
+close followed by identity-checked force. Fresh evidence, a separate recovery cooldown,
+and the existing action lock prevent stale readings or competing checks from authorizing
+restarts. Thresholds, evidence rules, and limitations are documented in the plugin README.
+
 ## Liveness-gated stuck detection and orphan repair
 
 `plugins/overnight-agent/checks/stuck-run-sweep.mjs` is the main repairer for stuck workflow rows.

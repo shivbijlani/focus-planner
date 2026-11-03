@@ -11,6 +11,7 @@ import {
 } from './reliability-supervisor.mjs';
 import { loadReliabilityPolicy } from './oa-user-settings.mjs';
 import { listCopilotProcesses } from './windows-app-actuator.mjs';
+import { MEMORY_POLICY, observeMemory } from './memory-pressure.mjs';
 
 function guiIdentity(rows) {
   const candidates = rows.filter(row =>
@@ -66,6 +67,7 @@ export function requireSqliteRuntime(version = process.versions.node) {
 export function applyReliabilityPolicy(config, values = {}) {
   return validateConfig({
     ...config,
+    memoryPressure: { enabled: values.memoryRecovery ?? false },
     preventiveRestart: {
       targetIntervalHours: values.targetIntervalHours ??
         DEFAULT_CONFIG.preventiveRestart.targetIntervalHours,
@@ -88,6 +90,7 @@ export function applyReliabilityPolicy(config, values = {}) {
 
 export function nextEvaluationDelay(config, lastCycle, nowMs = Date.now()) {
   let delay = config.supervisor.checkIntervalSeconds * 1_000;
+  if (config.memoryPressure.enabled) delay = Math.min(delay, MEMORY_POLICY.pollMs);
   const evaluatedAt = Date.parse(lastCycle.checkedAt);
   for (const time of [lastCycle.actuator?.cycle?.opportunityAt,
     lastCycle.actuator?.cycle?.hardDeadlineAt]) {
@@ -105,6 +108,7 @@ export function nextEvaluationDelay(config, lastCycle, nowMs = Date.now()) {
 export async function reconcileConsumerConfig(paths, { policy } = {}) {
   const config = await loadConfig(paths.config);
   const declared = policy ?? await loadReliabilityPolicy();
+  const memoryEnabled = declared.values.memoryRecovery ?? false;
   const snapshotPath = config.supervisor.inputPath ?? paths.snapshot;
   const helper = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'windows-app-actuator.mjs');
   const db = join(homedir(), '.copilot', 'data.db');
@@ -116,7 +120,7 @@ export async function reconcileConsumerConfig(paths, { policy } = {}) {
   const old = ['--old-pid', '{oldPid}', '--old-start-time', '{oldStartTime}',
     '--old-path', '{oldPath}'];
   const desired = {
-    snapshot: command('snapshot', dbArgs),
+    snapshot: command('snapshot', [...dbArgs, ...(memoryEnabled ? ['--memory', 'true'] : [])]),
     requestShutdown: command('shutdown', [
       '--snapshot', snapshotPath, '--attempt', '{attemptId}', '--deadline', '{deadlineSeconds}', ...old]),
     forceTerminate: command('force', [
@@ -221,6 +225,9 @@ export async function runConsumerSupervisor({
   if (noAct) {
     const state = await loadState(paths.state);
     const snapshot = await adapters.inspect(input);
+    if (config.memoryPressure.enabled) {
+      state.memoryPressure = observeMemory(snapshot.memory, snapshot.app, state.memoryPressure, clock.now());
+    }
     return {
       status: 'detect-only',
       reason: determineReason({ ...input, ...snapshot }, config, state, clock.now()),
@@ -228,6 +235,10 @@ export async function runConsumerSupervisor({
       evidenceError: snapshot.snapshotError ?? null,
       cooldown: cooldownStatus(state, config, clock.now()),
       cycle: restartCycleStatus(state, config),
+      ...(config.memoryPressure.enabled ? {
+        memory: state.memoryPressure,
+        nextEvaluationAt: new Date(clock.now() + MEMORY_POLICY.pollMs).toISOString(),
+      } : {}),
     };
   }
   const checkedAt = new Date(clock.now()).toISOString();
@@ -281,6 +292,7 @@ export async function readSupervisorStatus({
       hardDeadlineHours: config.preventiveRestart.hardIntervalHours,
       quietWindowMinutes: config.preventiveRestart.quietWindowMinutes,
       cooldownMinutes: config.appRestart.minIntervalMinutes,
+      memoryPressureRecovery: config.memoryPressure.enabled,
     };
   } catch (error) {
     policy = { valid: false, enabled: false, error: String(error?.message ?? error) };

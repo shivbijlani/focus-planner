@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { classifyTerminalEvidence, parseLockFilename, readSessionEvidence } from "./session-terminal-evidence.mjs";
 import { HARD_RESTART_AUTHORIZATION } from "./reliability-supervisor.mjs";
+import { MEMORY_RESTART_AUTHORIZATION } from "./memory-pressure.mjs";
 export { summariseSessionEvents } from "./session-terminal-evidence.mjs";
 
 const RESULT_PREFIX = "SUPERVISOR_ADAPTER_RESULT=";
@@ -96,6 +97,62 @@ $ErrorActionPreference='Stop'
 ) | ConvertTo-Json -Compress
 `, options);
   return Array.isArray(rows) ? rows : rows ? [rows] : [];
+}
+
+export function summarizeMemoryCounters(counters, appIdentity, observedAt) {
+  const rows = counters?.processes;
+  if (!Array.isArray(rows)) throw new Error("memory process counters unavailable");
+  const root = rows.find(row => sameIdentity(row, appIdentity));
+  if (!root || !isCopilotGuiCandidate(root)) throw new Error("memory sample cannot verify Copilot identity");
+  const byPid = new Map(rows.map(row => [row.pid, row]));
+  const owned = new Set([root.pid]);
+  // A reused parent PID must not attribute an older, unrelated child to this app.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const row of rows) {
+      if (owned.has(row.pid) || !owned.has(row.parentPid)) continue;
+      const parent = byPid.get(row.parentPid);
+      if (validDate(row.startTime) === null || validDate(parent.startTime) === null ||
+          validDate(row.startTime) < validDate(parent.startTime)) continue;
+      owned.add(row.pid);
+      changed = true;
+    }
+  }
+  const appRows = rows.filter(row => owned.has(row.pid));
+  if (appRows.some(row => !Number.isSafeInteger(row.privateBytes) || row.privateBytes < 0)) {
+    throw new Error("Copilot private memory counters unreadable");
+  }
+  return {
+    observedAt, appIdentity,
+    committedBytes: counters.committedBytes, commitLimitBytes: counters.commitLimitBytes,
+    appPrivateBytes: appRows.reduce((total, row) => total + row.privateBytes, 0),
+    topConsumers: [...rows].filter(row => Number.isSafeInteger(row.privateBytes) && row.privateBytes >= 0)
+      .sort((a, b) => b.privateBytes - a.privateBytes).slice(0, 5)
+      .map(row => ({ pid: row.pid, name: row.name, privateBytes: row.privateBytes, belongsToApp: owned.has(row.pid) })),
+  };
+}
+
+export async function collectMemoryPressure(appIdentity, { now = Date.now, read = powershellJson } = {}) {
+  const counters = read(`
+$ErrorActionPreference='Stop'
+$memory = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory
+$rows = @(Get-CimInstance Win32_Process | ForEach-Object {
+  [pscustomobject]@{
+    pid = [int]$_.ProcessId
+    parentPid = [int]$_.ParentProcessId
+    name = [string]$_.Name
+    path = [string]$_.ExecutablePath
+    startTime = $(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null })
+    privateBytes = $(if ($null -ne $_.PrivatePageCount) { [double]$_.PrivatePageCount } else { $null })
+  }
+})
+[pscustomobject]@{
+  committedBytes = [double]$memory.CommittedBytes
+  commitLimitBytes = [double]$memory.CommitLimit
+  processes = $rows
+} | ConvertTo-Json -Depth 4 -Compress
+`);
+  return summarizeMemoryCounters(counters, appIdentity, iso(now()));
 }
 
 export async function listCopilotProcesses() {
@@ -715,6 +772,8 @@ export async function captureSnapshot({
   sessionStateDirectory,
   processProvider = listCopilotProcesses,
   processTableProvider = listWindowsProcessTable,
+  includeMemory = false,
+  memoryProvider = collectMemoryPressure,
   now = () => Date.now(),
 } = {}) {
   const observedAt = iso(now());
@@ -795,6 +854,15 @@ export async function captureSnapshot({
     scheduler: database.scheduler,
     errors,
   };
+  if (includeMemory) {
+    try {
+      if (!app.running || app.evidence !== "known") throw new Error("Copilot identity unavailable for memory attribution");
+      snapshot.memory = await memoryProvider(app.identity);
+    } catch (error) {
+      snapshot.memory = { error: `memory inspection failed: ${error.message}` };
+      errors.push(snapshot.memory.error);
+    }
+  }
   if (snapshotPath) await atomicJsonWrite(snapshotPath, snapshot);
   return snapshot;
 }
@@ -856,7 +924,8 @@ export async function forceTerminate({
   dryRun = false,
   restartMode = "quiet-opportunity",
 } = {}) {
-  if (!["quiet-opportunity", "hard-deadline"].includes(restartMode) ||
+  if (!["quiet-opportunity", "hard-deadline", "memory-critical"].includes(restartMode) ||
+      (restartMode === "memory-critical" && authorization !== MEMORY_RESTART_AUTHORIZATION) ||
       (restartMode === "hard-deadline" && authorization !== HARD_RESTART_AUTHORIZATION)) {
     return { ok: false, error: "invalid preventive restart mode or hard-deadline authorization" };
   }
@@ -982,6 +1051,7 @@ async function cli(argv) {
       databasePath: args.db,
       sessionStorePath: args["session-store"],
       sessionStateDirectory: args["session-state"],
+      includeMemory: args["memory"] === "true",
     });
     result = { ok: true, observedAt: result.observedAt };
   } else if (args.command === "shutdown") {
