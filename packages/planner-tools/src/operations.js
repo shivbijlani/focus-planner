@@ -16,10 +16,12 @@ import {
   findTasksById,
   listBoardTasks,
   opAddTask,
+  opApplySnoozeTransitions,
   opBridgeLinks,
   opCompleteTask,
   opMoveBetweenSections,
   opSetTaskPriority,
+  opSetTaskPrioritized,
   opSnoozeTask,
   taskIdFromCell,
 } from '../../../src/focusPlanOps.js'
@@ -40,7 +42,7 @@ import { ToolError, requireValue } from './errors.js'
 import { BOARD, BOARD_SIDECAR, COMPLETED, JOURNAL_DIR, TASK_SETTINGS, journalPath } from './paths.js'
 import { docsRead, makeDocsPublish } from './docs.js'
 
-export const VERSION = '1.1.0'
+export const VERSION = '1.2.0'
 
 // ── Input validation ────────────────────────────────────────────────────────
 
@@ -366,6 +368,52 @@ const moveTask = {
   },
 }
 
+const setPrioritized = {
+  needs: () => [BOARD],
+  compute(args, snapshots) {
+    operationIdArg(args.operationId)
+    const taskId = taskIdArg(args.taskId)
+    requireValue(typeof args.prioritized === 'boolean', 'prioritized must be true or false.')
+    const board = requireBoard(snapshots)
+    if (!oneTask(board, taskId)) throw new ToolError('TASK_NOT_FOUND', `Task ${taskId} is not on the board.`)
+    const next = opSetTaskPrioritized(board, taskId, args.prioritized)
+    return {
+      result: { taskId, prioritized: args.prioritized },
+      writes: next === board ? [] : [{
+        name: BOARD, content: next,
+        purpose: `${args.prioritized ? 'Add' : 'Remove'} task ${taskId} ${args.prioritized ? 'to' : 'from'} your priorities`,
+      }],
+    }
+  },
+}
+
+const applySnoozeTransitions = {
+  needs: () => [BOARD],
+  compute(args, snapshots) {
+    operationIdArg(args.operationId)
+    const asOf = dateArg(args.asOf, 'asOf')
+    const taskId = args.taskId === undefined ? null : taskIdArg(args.taskId)
+    const board = requireBoard(snapshots)
+    if (taskId !== null && !oneTask(board, taskId)) {
+      throw new ToolError('TASK_NOT_FOUND', `Task ${taskId} is not on the board.`)
+    }
+    const before = listBoardTasks(board)
+    const next = opApplySnoozeTransitions(board, asOf, taskId)
+    const afterById = new Map(listBoardTasks(next).map(task => [task.id, task]))
+    const wokeTaskIds = []
+    const deferredTaskIds = []
+    for (const task of before) {
+      const updated = afterById.get(task.id)
+      if (task.section === 'Deferred' && updated?.section === 'Today') wokeTaskIds.push(task.id)
+      if (task.section === 'Today' && updated?.section === 'Deferred') deferredTaskIds.push(task.id)
+    }
+    return {
+      result: { asOf, wokeTaskIds, deferredTaskIds },
+      writes: next === board ? [] : [{ name: BOARD, content: next, purpose: `Apply snooze transitions as of ${asOf}` }],
+    }
+  },
+}
+
 function journalBase(snapshots, board, taskId) {
   const existing = content(snapshots, journalPath(taskId))
   if (existing != null) return { text: existing, created: false }
@@ -475,7 +523,9 @@ export const OPERATIONS = {
   get_task: getTask,
   add_task: addTask,
   set_priority: setPriority,
+  set_prioritized: setPrioritized,
   move_task: moveTask,
+  apply_snooze_transitions: applySnoozeTransitions,
   append_journal: appendJournal,
   set_todo: setTodo,
   complete_task: completeTask,

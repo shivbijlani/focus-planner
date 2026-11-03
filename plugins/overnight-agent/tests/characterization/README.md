@@ -126,6 +126,13 @@ tokens out of journals whose hash a state file records. Because relative times a
 5-minute buckets, use whole multiples of 5 minutes and stay at least 5 minutes clear of any
 threshold a case is meant to sit on one side of.
 
+Use `NOW` for relative doc observation fixtures whose timestamps are also rendered as
+PowerShell invariant strings. That rendering drops the timezone: a `UTC` fixture would be
+interpreted as local by the normalizer, adding seven hours in summer or eight in winter.
+Offset-bearing `NOW` values retain the same observation age and render in the local clock
+the normalizer expects. The seasonal regression in `lib/normalize.test.mjs` checks these
+fixtures in both seasons and on daylight-saving transition days.
+
 ## Case files
 
 `cases/*.json`, each `{ "fixture": "base", "covers": ["mutcheck-..."], "cases": [ ... ] }`.

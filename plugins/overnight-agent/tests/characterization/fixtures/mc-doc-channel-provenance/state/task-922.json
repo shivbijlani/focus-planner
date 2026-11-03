@@ -22,6 +22,6 @@
       "NEW922A",
       "NEW922B"
     ],
-    "observed_at": "{{UTC-6h}}"
+    "observed_at": "{{NOW-6h}}"
   }
 }

@@ -19,6 +19,6 @@
       "OLD931"
     ],
     "pending_ids": [],
-    "observed_at": "{{UTC-6h}}"
+    "observed_at": "{{NOW-6h}}"
   }
 }

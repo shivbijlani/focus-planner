@@ -444,7 +444,7 @@ export function opSnoozeTask(content, rawLine, snoozeUntil) {
   return lines.join('\n')
 }
 
-export function opApplySnoozeTransitions(content, today) {
+export function opApplySnoozeTransitions(content, today, taskId = null) {
   let updated = content
   const lines = content.split('\n')
   let section = null
@@ -465,6 +465,7 @@ export function opApplySnoozeTransitions(content, today) {
       continue
     }
     if (cells.every(c => /^[-:]+$/.test(c))) continue
+    if (taskId !== null && taskIdFromCell(cells[0]) !== String(taskId)) continue
     const snoozeUntil = parseSnoozeUntil(trimmed, headers)
     if (!snoozeUntil) continue
     if (section === 'Deferred' && !isSnoozeActive(snoozeUntil, today)) {
@@ -910,6 +911,19 @@ export function opRemoveFromManagerPriority(content, taskId) {
   })
   const after = lines.slice(end)
   return [...before, ...renumbered, ...after].join('\n')
+}
+
+export function opSetTaskPrioritized(content, taskId, prioritized) {
+  const lines = content.split('\n')
+  const { start, end } = findPrioritiesRange(lines)
+  const present = start !== -1 && lines.slice(start + 1, end).some(line => {
+    const match = line.trim().match(/^\d+\.\s+(.+)$/)
+    return match?.[1].trim() === taskId
+  })
+  if (present === prioritized) return content
+  return prioritized
+    ? opPromoteToManagerPriority(content, taskId)
+    : opRemoveFromManagerPriority(content, taskId)
 }
 
 // ── Move-to-completed ───────────────────────────────────────────────

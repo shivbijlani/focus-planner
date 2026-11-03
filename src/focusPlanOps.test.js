@@ -190,6 +190,26 @@ describe('snooze section moves', () => {
     expect(out).toBe(snoozePlan)
   })
 
+  it('limits explicit task transitions to that task and keeps board-wide transitions as the default', () => {
+    const board = snoozePlan
+      .replace('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
+        '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 | <!-- snooze:2026-07-11 -->')
+      .replace('| 9 | ⚪ | Later | - | 2026-06-30 |  | |',
+        '| 9 | ⚪ | Later | - | 2026-06-30 | 2026-07-10 | |')
+    const scoped = opApplySnoozeTransitions(board, '2026-07-10', '9')
+    expect(scoped).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 | <!-- snooze:2026-07-11 -->')
+    expect(scoped.split('## Deferred')[0]).toContain('| 9 | ⚪ | Later | - | 2026-06-30 |  |')
+    expect(opApplySnoozeTransitions(board, '2026-07-09', '9')).toBe(board)
+    expect(opApplySnoozeTransitions(scoped, '2026-07-10', '9')).toBe(scoped)
+    const deferred = opApplySnoozeTransitions(board, '2026-07-10', '2')
+    expect(deferred.split('## Deferred')[0]).not.toContain('Weekend blocker')
+    expect(deferred.split('## Deferred')[1]).toContain('| 9 | ⚪ | Later | - | 2026-06-30 | 2026-07-10 |  |')
+
+    const all = opApplySnoozeTransitions(board, '2026-07-10')
+    expect(all.split('## Deferred')[0]).not.toContain('Weekend blocker')
+    expect(all.split('## Deferred')[0]).toContain('| 9 |')
+  })
+
   it('defers future-dated Today snoozes into Deferred using the Wake column', () => {
     const todayWithLegacySnooze = snoozePlan.replace(
       '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
