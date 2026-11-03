@@ -1,0 +1,6 @@
+body { margin: 0; background: #f6f7f9; color: #24292f; font: 16px/1.6 system-ui, sans-serif; }
+main { max-width: 640px; margin: 8vh auto; padding: 32px; background: white; border-radius: 12px; }
+button { padding: 10px 16px; font: inherit; cursor: pointer; }
+button:disabled { cursor: default; }
+a { margin-left: 12px; }
+input { margin-right: 8px; }

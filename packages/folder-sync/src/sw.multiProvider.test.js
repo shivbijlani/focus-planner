@@ -21,11 +21,16 @@ const makeProvider = vi.hoisted(() => id => ({
   },
   async writeRemote(_provider, name, content) {
     const cloud = clouds.get(id)
+    if (cloud.onWrite) await cloud.onWrite(name)
     cloud.writes.push(name)
     cloud.files.set(name, content)
     return { mtime: Date.now() }
   },
-  async deleteRemote(_provider, name) { clouds.get(id).files.delete(name) },
+  async deleteRemote(_provider, name) {
+    const cloud = clouds.get(id)
+    if (cloud.onDelete) await cloud.onDelete(name)
+    cloud.files.delete(name)
+  },
 }))
 vi.mock('./providers/oneDrive.js', () => ({ oneDriveProvider: () => makeProvider('onedrive') }))
 vi.mock('./providers/googleDrive.js', () => ({ googleDriveProvider: () => makeProvider('google-drive') }))
@@ -100,6 +105,143 @@ afterEach(() => {
 })
 
 describe('actual service worker: device + OneDrive + Google Drive', () => {
+  it('resumes a large restore across bounded pull batches without losing downloaded progress', async () => {
+    const cloud = clouds.get('onedrive')
+    cloud.files.set('a.md', 'first cloud file')
+    cloud.files.set('b.md', 'second cloud file')
+    cloud.onRead = async () => { vi.setSystemTime(Date.now() + 60_001) }
+    await cycle(['onedrive'])
+    expect((await readLocalSnapshot('a.md')).content).toBe('first cloud file')
+    expect((await readLocalSnapshot('b.md')).content).toBeNull()
+    expect(statuses.at(-1).state).toBe('syncing')
+    cloud.onRead = null
+    await cycle(['onedrive'])
+    expect((await readLocalSnapshot('b.md')).content).toBe('second cloud file')
+    await cycle(['onedrive'])
+    expect(statuses.at(-1).state).toBe('synced')
+  })
+
+  it('does not resurrect queued deletions when a bulk cleanup exceeds the push budget', async () => {
+    const cloud = clouds.get('onedrive')
+    for (const name of ['a.log', 'b.log']) {
+      cloud.files.set(name, 'tool output')
+      await idbSet('meta', `mtime:onedrive:${name}`, 1)
+      await saveLocalReplica(name, null)
+      await enqueue(name)
+    }
+    cloud.onDelete = async () => { vi.setSystemTime(Date.now() + 60_001) }
+    cloud.onRead = vi.fn()
+    await cycle(['onedrive'])
+    expect(cloud.files.has('a.log')).toBe(false)
+    expect(cloud.files.has('b.log')).toBe(true)
+    expect((await readLocalSnapshot('a.log')).content).toBeNull()
+    expect((await readLocalSnapshot('b.log')).content).toBeNull()
+    expect(cloud.onRead).not.toHaveBeenCalled()
+    expect(statuses.at(-1).state).toBe('syncing')
+    expect(await idbGet('meta', 'pending:onedrive')).toEqual(['b.log'])
+    cloud.onDelete = null
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(statuses.filter(status => status.state === 'syncing' && !status.lastSync)).toHaveLength(2)
+    await cycle(['onedrive'])
+    expect(cloud.files.size).toBe(0)
+    expect(statuses.at(-1).state).toBe('synced')
+  })
+
+  it('does not replace a pending local edit with the old cloud copy after the push budget', async () => {
+    const cloud = clouds.get('onedrive')
+    for (const name of ['a.md', 'b.md']) {
+      cloud.files.set(name, 'old')
+      await idbSet('meta', `mtime:onedrive:${name}`, 1)
+      await saveLocalReplica(name, 'new')
+      await enqueue(name)
+    }
+    cloud.onWrite = async () => { vi.setSystemTime(Date.now() + 60_001) }
+    await cycle(['onedrive'])
+    expect((await readLocalSnapshot('b.md')).content).toBe('new')
+    expect(cloud.files.get('b.md')).toBe('old')
+    cloud.onWrite = null
+    await cycle(['onedrive'])
+    expect(cloud.files.get('b.md')).toBe('new')
+  })
+  it('does not report backed up while a pull has queued changes for another pass', async () => {
+    clouds.get('onedrive').files.set('journal/task-1.md', '# Remote journal')
+    await cycle()
+    const last = statuses.at(-1)
+    expect(last.state).toBe('syncing')
+    expect(last.providers.onedrive.pending).toBeGreaterThan(0)
+    await cycle()
+    expect(statuses.at(-1).state).toBe('synced')
+    expect(statuses.at(-1).providers.onedrive.pending).toBe(0)
+  })
+
+  it('refuses reset while another app window can still write', async () => {
+    self.clients.matchAll = async () => [{ id: 'reset' }, { id: 'another-tab' }]
+    let work
+    const reply = vi.fn()
+    events.get('message')({
+      data: { type: 'pause-for-reset' }, source: { id: 'reset' }, ports: [{ postMessage: reply }],
+      waitUntil: promise => { work = promise },
+    })
+    await work
+    expect(reply.mock.calls[0][0].error).toContain('Close other')
+    await saveLocalReplica('note.md', 'still running', { importing: true })
+    await cycle()
+    expect(clouds.get('onedrive').files.get('note.md')).toBe('still running')
+  })
+
+  it('blocks sync before the first reset client check settles', async () => {
+    await cycle(['onedrive'])
+    const cloud = clouds.get('onedrive')
+    cloud.files.set('junk.log', 'remote copy')
+    await idbSet('meta', 'mtime:onedrive:junk.log', 1)
+    await saveLocalReplica('junk.log', null)
+    await enqueue('junk.log')
+    let releaseClientCheck
+    const clientCheck = new Promise(resolve => { releaseClientCheck = resolve })
+    let clientChecks = 0
+    self.clients.matchAll = async () => {
+      clientChecks += 1
+      if (clientChecks === 1) await clientCheck
+      return [{ id: 'reset' }]
+    }
+    let stopping
+    const reply = vi.fn()
+    events.get('message')({
+      data: { type: 'pause-for-reset' }, source: { id: 'reset' }, ports: [{ postMessage: reply }],
+      waitUntil: promise => { stopping = promise },
+    })
+    await cycle(['onedrive'])
+    expect(cloud.files.get('junk.log')).toBe('remote copy')
+    releaseClientCheck()
+    await stopping
+    expect(reply).toHaveBeenCalledWith({ paused: true })
+  })
+
+  it('acknowledges reset only after the in-flight cycle settles and blocks later nudges', async () => {
+    self.clients.matchAll = async () => [{ id: 'reset', postMessage: () => {} }]
+    let release, entered
+    const reading = new Promise(resolve => { entered = resolve })
+    const blocked = new Promise(resolve => { release = resolve })
+    clouds.get('onedrive').files.set('note.md', 'cloud note')
+    clouds.get('onedrive').onRead = async () => { entered(); await blocked }
+    const syncing = cycle(['onedrive'])
+    await reading
+    let stopping
+    const reply = vi.fn()
+    events.get('message')({
+      data: { type: 'pause-for-reset' }, source: { id: 'reset' }, ports: [{ postMessage: reply }],
+      waitUntil: promise => { stopping = promise },
+    })
+    await Promise.resolve()
+    expect(reply).not.toHaveBeenCalled()
+    release()
+    await syncing
+    await stopping
+    expect(reply).toHaveBeenCalledWith({ paused: true })
+    const count = statuses.length
+    await cycle()
+    expect(statuses).toHaveLength(count)
+  })
   it.each([
     ['onedrive', 'google-drive'],
     ['google-drive', 'onedrive'],

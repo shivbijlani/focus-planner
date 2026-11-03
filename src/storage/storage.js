@@ -148,7 +148,7 @@ function mapTargetStatus(p, overall) {
   if (!p.connected) return TARGET_STATUS.DISCONNECTED
   if (overall === 'error' || p.state === 'error') return TARGET_STATUS.ERROR
   if (overall === 'syncing' || p.state === 'syncing') return TARGET_STATUS.SYNCING
-  return TARGET_STATUS.SYNCED // connected & (synced | idle)
+  return p.state === 'synced' ? TARGET_STATUS.SYNCED : TARGET_STATUS.PENDING
 }
 
 function mapEngineStatus(s) {
@@ -156,16 +156,21 @@ function mapEngineStatus(s) {
   const targets = {}
   for (const id of [PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE]) {
     const p = provStates[id]
-    targets[id] = { status: mapTargetStatus(p, s?.state), message: p?.error || s?.error || '' }
+    targets[id] = {
+      status: mapTargetStatus(p, s?.state),
+      message: p?.error || s?.error || (p?.pending > 0 ? `${p.pending} file(s) pending` : ''),
+    }
   }
   const statuses = Object.values(targets).map(t => t.status)
   let aggregate = TARGET_STATUS.DISCONNECTED
-  if (s?.state === 'syncing' || statuses.includes(TARGET_STATUS.SYNCING)) {
-    aggregate = TARGET_STATUS.SYNCING
-  } else if (statuses.includes(TARGET_STATUS.RECONNECT_NEEDED)) {
+  if (statuses.includes(TARGET_STATUS.RECONNECT_NEEDED)) {
     aggregate = TARGET_STATUS.RECONNECT_NEEDED
   } else if (s?.state === 'error' || statuses.includes(TARGET_STATUS.ERROR)) {
     aggregate = TARGET_STATUS.ERROR
+  } else if (s?.state === 'syncing' || statuses.includes(TARGET_STATUS.SYNCING)) {
+    aggregate = TARGET_STATUS.SYNCING
+  } else if (statuses.includes(TARGET_STATUS.PENDING)) {
+    aggregate = TARGET_STATUS.PENDING
   } else if (statuses.includes(TARGET_STATUS.SYNCED)) {
     aggregate = TARGET_STATUS.SYNCED
   }

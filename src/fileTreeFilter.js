@@ -24,6 +24,13 @@
 import { PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { AGENTS_FILE } from './config/agentsDoc.js'
 import { AGENT_GATE_FILE } from './config/agentGate.js'
+import { isSidebarClutter } from './storage/fileCleanup.js'
+
+export function hideSidebarClutter(items) {
+  return (items || []).filter(item => !isSidebarClutter(item.path || item.name)).map(item =>
+    item.type === 'directory' ? { ...item, children: hideSidebarClutter(item.children) } : item,
+  )
+}
 
 export const CARED_ABOUT_FILES = new Set([
   PLAN_FILE,

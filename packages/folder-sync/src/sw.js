@@ -1,7 +1,7 @@
 // Service worker — drains the dirty-file queue and pulls remote changes.
 // Registered with `{ type: 'module' }`.  Chromium / latest Firefox / Safari 16+.
 
-import { enqueue, peekAll, dequeue } from './queue.js'
+import { enqueue, peekAll, dequeue, has as isQueued } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
@@ -22,6 +22,7 @@ const PROVIDER_FACTORIES = {
 }
 
 let currentProviders = []
+let resetPaused = false
 
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (evt) => evt.waitUntil(self.clients.claim()))
@@ -29,7 +30,35 @@ self.addEventListener('activate', (evt) => evt.waitUntil(self.clients.claim()))
 self.addEventListener('message', (evt) => {
   const msg = evt.data
   if (!msg) return
+  if (msg.type === 'pause-for-reset') {
+    const wasResetPaused = resetPaused
+    resetPaused = true
+    evt.waitUntil((async () => {
+      try {
+        const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
+        if (!evt.source?.id || clients.some(client => client.id !== evt.source.id)) {
+          resetPaused = wasResetPaused
+          evt.ports[0]?.postMessage({ error: 'Close other Planner and Docs tabs or installed windows, then retry.' })
+          return
+        }
+        await inFlight
+        const remainingClients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
+        if (remainingClients.some(client => client.id !== evt.source.id)) {
+          resetPaused = wasResetPaused
+          evt.ports[0]?.postMessage({ error: 'Another Planner or Docs window opened while backup stopped. Close it and retry.' })
+          return
+        }
+        currentProviders = []
+        evt.ports[0]?.postMessage({ paused: true })
+      } catch (error) {
+        resetPaused = wasResetPaused
+        evt.ports[0]?.postMessage({ error: `Backup did not stop cleanly: ${error.message}` })
+      }
+    })())
+    return
+  }
   if (msg.type === 'sync') {
+    if (resetPaused) return
     currentProviders = (msg.providers || []).map(p => {
       const factory = PROVIDER_FACTORIES[p.id]
       return factory ? factory({ clientId: p.clientId }) : null
@@ -48,6 +77,7 @@ self.addEventListener('periodicsync', (evt) => {
 
 let inFlight = null
 async function runSync(reason) {
+  if (resetPaused) return
   if (inFlight) return inFlight
   followUpScheduled = false
   inFlight = (async () => {
@@ -96,15 +126,21 @@ async function runSync(reason) {
             : { connected: true, state: 'syncing', error: null }
         } catch (e) { fail(p, e) }
       }
+      const queued = await peekAll()
+      for (const p of currentProviders) {
+        const ps = providerStatuses[p.id]
+        if (!ps) continue
+        ps.pending = new Set([...(await getPending(p.id)), ...queued]).size
+        if (ps.state === 'synced' && ps.pending > 0) ps.state = 'syncing'
+      }
       const states = Object.values(providerStatuses).map(s => s.state)
       const overall = states.includes('reconnect-required')
         ? 'reconnect-required'
-        : states.every(s => s === 'synced')
-          ? 'synced'
-          : 'idle'
+        : states.includes('error') ? 'error'
+          : states.every(s => s === 'synced') ? 'synced' : 'syncing'
       await broadcast({ state: overall, lastSync: Date.now(), providers: providerStatuses, reason })
       // A push budget ran out: schedule another cycle to keep draining.
-      if ([...contexts.values()].some(c => !c.complete) || (await peekAll()).length) scheduleFollowUp()
+      if (overall === 'syncing') scheduleFollowUp()
     } finally {
       inFlight = null
     }
@@ -114,14 +150,15 @@ async function runSync(reason) {
 
 let followUpScheduled = false
 function scheduleFollowUp() {
-  if (followUpScheduled) return
+  if (resetPaused || followUpScheduled) return
   followUpScheduled = true
   const reg = self.registration
   if (reg && reg.sync && typeof reg.sync.register === 'function') {
-    reg.sync.register('folder-sync').catch(() => setTimeout(() => runSync('follow-up'), 1000))
-  } else {
-    setTimeout(() => runSync('follow-up'), 1000)
+    reg.sync.register('folder-sync').catch(error => console.warn('[folder-sync sw] background retry registration failed:', error))
   }
+  // Browsers may defer a successfully registered background event for minutes.
+  // Try immediately too; the durable registration covers worker termination.
+  setTimeout(() => runSync('follow-up').catch(error => console.error('[folder-sync sw] follow-up failed:', error)), 1000)
 }
 
 async function pushProvider(provider) {
@@ -192,7 +229,19 @@ async function pushProvider(provider) {
   return { remoteList, remoteNames, complete }
 }
 
-async function pullProvider(provider, { remoteList, remoteNames }, reconcileDeletes = false) {
+async function pullProvider(provider, context, reconcileDeletes = false) {
+  const { remoteList, remoteNames } = context
+  const pendingPush = new Set(await getPending(provider.id))
+  const startedAt = Date.now()
+  let pulled = 0
+  const outOfTime = () => {
+    if (pulled > 0 && Date.now() - startedAt > PULL_BUDGET_MS) {
+      context.complete = false
+      return true
+    }
+    pulled++
+    return false
+  }
 
   // 2) Pull: compare mtimes against the up-front listing, download newer. Files
   // we just created/updated in the push step are now tracked with an mtime >=
@@ -200,8 +249,12 @@ async function pullProvider(provider, { remoteList, remoteNames }, reconcileDele
   // get pulled here so the cloud copy is preserved locally.
   for (const item of remoteList) {
     if (isSidecarPath(item.name)) continue
+    // The listing predates this cycle's pushes. Do not fetch a file just
+    // deleted remotely, or overwrite an edit/delete waiting for the next budget.
+    if (!remoteNames.has(item.name) || pendingPush.has(item.name) || await isQueued(item.name)) continue
     const codec = RECORD_CODECS[item.name]
     if (codec) {
+      if (outOfTime()) return
       await reconcileRecord(provider, item.name, codec)
       await setRemoteMtime(provider.id, item.name, item.mtime)
       continue
@@ -215,6 +268,7 @@ async function pullProvider(provider, { remoteList, remoteNames }, reconcileDele
     const snapshot = await readLocalSnapshot(item.name)
     const localPresent = snapshot.content != null
     if (!shouldPullRemote({ lastSeen, remoteMtime: item.mtime, localPresent })) continue
+    if (outOfTime()) return
     const remoteContent = await provider.readRemote(provider, item.name)
     if (remoteContent != null) {
       if (snapshot.content != null && snapshot.content !== remoteContent) {
@@ -384,6 +438,7 @@ async function trackedRemoteNames(providerId) {
 // browser stops a service worker event after about 5 minutes; a first-contact
 // seed of a large folder can take longer, so it is spread over several cycles.
 const PUSH_BUDGET_MS = 60_000
+const PULL_BUDGET_MS = 60_000
 
 async function getPending(providerId) {
   const v = await idbGet(META_STORE, pendingKey(providerId))
