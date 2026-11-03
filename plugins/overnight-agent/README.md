@@ -442,6 +442,10 @@ PID?) and changes nothing.
 - **Is it installed and running?** `powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1` (no
   switch) prints `startup at sign-in: ENABLED/off`, `running: yes/no (PID ...)`, and the
   signed-in-user limitation. Add `-Json` for a machine-readable version.
+- **Crashes just after launch?** Run the deployed `oa-supervisor-tray.ps1` in a visible
+  Windows PowerShell console with `-NoAct` to see the error without allowing restarts.
+  Keep the tray icon enabled: `-NoTrayIcon` skips the Windows Forms timer and cannot
+  reproduce UI-loop failures. The tray integration suite covers both launch modes.
 - **Is it the only resident dispatcher?** It must be. Check
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (or Task Manager → Startup apps) for
   exactly one `Overnight Agent supervisor` value, and confirm there is no Scheduled Task, no

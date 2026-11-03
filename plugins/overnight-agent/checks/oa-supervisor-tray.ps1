@@ -510,12 +510,11 @@ $timer.add_Tick({
   }
   if (Step-BrowserWorkload) { Update-TrayIcon }
   if (Step-UpdateWorkload) { Update-TrayIcon }
-  if ($script:lastCriticalStamp -ne (if (Test-Path -LiteralPath $files.capabilities) {
+  $criticalStamp = if (Test-Path -LiteralPath $files.capabilities) {
     (Get-Item -LiteralPath $files.capabilities).LastWriteTimeUtc.Ticks
-  } else { 0 })) {
-    $script:lastCriticalStamp = if (Test-Path -LiteralPath $files.capabilities) {
-      (Get-Item -LiteralPath $files.capabilities).LastWriteTimeUtc.Ticks
-    } else { 0 }
+  } else { 0 }
+  if ($script:lastCriticalStamp -ne $criticalStamp) {
+    $script:lastCriticalStamp = $criticalStamp
     Update-TrayIcon
   }
 })
