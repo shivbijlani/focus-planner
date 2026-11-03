@@ -92,6 +92,10 @@ Cloud requests carry a 30-second abort deadline that also covers reading their
 response bodies. A stalled request therefore surfaces an error instead of holding
 the worker's in-flight sync indefinitely. Unfinished pending files remain queued
 for a later retry; a timeout is never interpreted as an empty cloud or a deletion.
+The pull phase skips files just deleted by the push phase and files with pending
+local edits or deletions. In particular, when bulk deletion exceeds the push
+budget, unprocessed tombstones must survive until the next cycle, not be replaced
+by their still-existing cloud copies.
 
 ## Browser reset and cleanup
 

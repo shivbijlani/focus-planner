@@ -1,7 +1,7 @@
 // Service worker — drains the dirty-file queue and pulls remote changes.
 // Registered with `{ type: 'module' }`.  Chromium / latest Firefox / Safari 16+.
 
-import { enqueue, peekAll, dequeue } from './queue.js'
+import { enqueue, peekAll, dequeue, has as isQueued } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
@@ -220,6 +220,7 @@ async function pushProvider(provider) {
 }
 
 async function pullProvider(provider, { remoteList, remoteNames }, reconcileDeletes = false) {
+  const pendingPush = new Set(await getPending(provider.id))
 
   // 2) Pull: compare mtimes against the up-front listing, download newer. Files
   // we just created/updated in the push step are now tracked with an mtime >=
@@ -227,6 +228,9 @@ async function pullProvider(provider, { remoteList, remoteNames }, reconcileDele
   // get pulled here so the cloud copy is preserved locally.
   for (const item of remoteList) {
     if (isSidecarPath(item.name)) continue
+    // The listing predates this cycle's pushes. Do not fetch a file just
+    // deleted remotely, or overwrite an edit/delete waiting for the next budget.
+    if (!remoteNames.has(item.name) || pendingPush.has(item.name) || await isQueued(item.name)) continue
     const codec = RECORD_CODECS[item.name]
     if (codec) {
       await reconcileRecord(provider, item.name, codec)

@@ -21,11 +21,16 @@ const makeProvider = vi.hoisted(() => id => ({
   },
   async writeRemote(_provider, name, content) {
     const cloud = clouds.get(id)
+    if (cloud.onWrite) await cloud.onWrite(name)
     cloud.writes.push(name)
     cloud.files.set(name, content)
     return { mtime: Date.now() }
   },
-  async deleteRemote(_provider, name) { clouds.get(id).files.delete(name) },
+  async deleteRemote(_provider, name) {
+    const cloud = clouds.get(id)
+    if (cloud.onDelete) await cloud.onDelete(name)
+    cloud.files.delete(name)
+  },
 }))
 vi.mock('./providers/oneDrive.js', () => ({ oneDriveProvider: () => makeProvider('onedrive') }))
 vi.mock('./providers/googleDrive.js', () => ({ googleDriveProvider: () => makeProvider('google-drive') }))
@@ -100,6 +105,46 @@ afterEach(() => {
 })
 
 describe('actual service worker: device + OneDrive + Google Drive', () => {
+  it('does not resurrect queued deletions when a bulk cleanup exceeds the push budget', async () => {
+    const cloud = clouds.get('onedrive')
+    for (const name of ['a.log', 'b.log']) {
+      cloud.files.set(name, 'tool output')
+      await idbSet('meta', `mtime:onedrive:${name}`, 1)
+      await saveLocalReplica(name, null)
+      await enqueue(name)
+    }
+    cloud.onDelete = async () => { vi.setSystemTime(Date.now() + 60_001) }
+    cloud.onRead = vi.fn()
+    await cycle(['onedrive'])
+    expect(cloud.files.has('a.log')).toBe(false)
+    expect(cloud.files.has('b.log')).toBe(true)
+    expect((await readLocalSnapshot('a.log')).content).toBeNull()
+    expect((await readLocalSnapshot('b.log')).content).toBeNull()
+    expect(cloud.onRead).not.toHaveBeenCalled()
+    expect(statuses.at(-1).state).toBe('syncing')
+    expect(await idbGet('meta', 'pending:onedrive')).toEqual(['b.log'])
+    cloud.onDelete = null
+    await cycle(['onedrive'])
+    expect(cloud.files.size).toBe(0)
+    expect(statuses.at(-1).state).toBe('synced')
+  })
+
+  it('does not replace a pending local edit with the old cloud copy after the push budget', async () => {
+    const cloud = clouds.get('onedrive')
+    for (const name of ['a.md', 'b.md']) {
+      cloud.files.set(name, 'old')
+      await idbSet('meta', `mtime:onedrive:${name}`, 1)
+      await saveLocalReplica(name, 'new')
+      await enqueue(name)
+    }
+    cloud.onWrite = async () => { vi.setSystemTime(Date.now() + 60_001) }
+    await cycle(['onedrive'])
+    expect((await readLocalSnapshot('b.md')).content).toBe('new')
+    expect(cloud.files.get('b.md')).toBe('old')
+    cloud.onWrite = null
+    await cycle(['onedrive'])
+    expect(cloud.files.get('b.md')).toBe('new')
+  })
   it('does not report backed up while a pull has queued changes for another pass', async () => {
     clouds.get('onedrive').files.set('journal/task-1.md', '# Remote journal')
     await cycle()
