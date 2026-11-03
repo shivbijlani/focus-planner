@@ -88,6 +88,10 @@ The UI reports a connected but not-yet-checked target as pending, not backed up.
 cycle remains in progress while either its per-provider pending list or the shared
 queue contains work, including changes just pulled from another target. Settings
 shows the pending count returned at the end of each cycle.
+Cloud requests carry a 30-second abort deadline that also covers reading their
+response bodies. A stalled request therefore surfaces an error instead of holding
+the worker's in-flight sync indefinitely. Unfinished pending files remain queued
+for a later retry; a timeout is never interpreted as an empty cloud or a deletion.
 
 ## Browser reset and cleanup
 
