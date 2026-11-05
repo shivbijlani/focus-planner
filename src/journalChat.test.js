@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseJournalChat, appendJournalMessage, formatCloseOutComment, FROM_ME } from './journalChat.js'
+import { parseJournalChat, appendJournalMessage, formatCloseOutComment, FROM_ME, listToggleableTodos, toggleTodoAt, setTodoDone, buildNewJournal, parseTodos } from './journalChat.js'
 import { appendUserReply } from '../packages/telegram-bridge/src/journal.js'
 
 // Simplified excerpt mirroring the real journal/task-254.md structure:
@@ -472,5 +472,25 @@ describe('appendJournalMessage author attribution (#641)', () => {
       expect(out).toContain(`${FROM_ME}\ntext`)
       expect(out.match(/<!-- from: /g)).toHaveLength(1)
     }
+  })
+})
+describe('#836 shared todo toggling', () => {
+  const journal = '# T\n\n- [ ] one\n> - [ ] quoted\n* [x] two\n- TODO: three\n- DONE: four\n'
+  it('enumerates toggleable items in the chat view order', () => {
+    expect(listToggleableTodos(journal).map(t => [t.index, t.text, t.done])).toEqual([
+      [0, 'one', false], [1, 'two', true], [2, 'three', false], [3, 'four', true],
+    ])
+  })
+  it('toggles and sets by index', () => {
+    expect(toggleTodoAt(journal, 0)).toContain('- [x] one')
+    expect(toggleTodoAt(journal, 2)).toContain('- DONE: three')
+    expect(setTodoDone(journal, 3, true)).toBe(journal)
+    expect(setTodoDone(journal, 3, false)).toContain('- TODO: four')
+    expect(toggleTodoAt(journal, 9)).toBeNull()
+  })
+  it('builds a new journal like the board does', () => {
+    expect(buildNewJournal(7, '[Fix](http://x) it ')).toBe('# Task 7: Fix it\n\n- TODO: \n')
+    expect(buildNewJournal(7, 'X', { todoStub: false })).toBe('# Task 7: X\n\n')
+    expect(parseTodos('- [x] a\n- TODO: b')).toEqual([{ done: true, text: 'a' }, { done: false, text: 'b' }])
   })
 })

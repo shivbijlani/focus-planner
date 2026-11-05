@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import profile from '#planner/deployment-profile'
 import './index.css'
 import { AppRoot } from './AppRoot.jsx'
+import { RESET_KEY } from './storage/reset.js'
 
 document.title = profile.branding.name
 const favicon = document.querySelector('link[rel="icon"]')
@@ -12,7 +13,9 @@ if (favicon && profile.branding.icon) {
   favicon.href = new URL(profile.branding.icon, document.baseURI).href
 }
 
-createRoot(document.getElementById('root')).render(
+if (localStorage.getItem(RESET_KEY)) {
+  window.location.replace(`${import.meta.env.BASE_URL}reset.html`)
+} else createRoot(document.getElementById('root')).render(
   <StrictMode>
     <AppRoot />
   </StrictMode>,

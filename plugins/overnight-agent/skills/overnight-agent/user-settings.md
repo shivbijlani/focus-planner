@@ -194,7 +194,14 @@ the tray is itself the opt-in; `Enabled = off` turns the workload off without un
 | Quiet opportunity (M) | `3h` — earliest preventive restart, and only during a verified quiet window. |
 | Hard deadline (N) | `4h` — restart regardless of activity evidence. Omit this row and N is derived from M. |
 | Quiet window | `15m` — continuous quiet required before a preventive (non-deadline) restart. |
-| Restart cooldown | `60m` — never restart more than once per this interval. |
+| Restart cooldown | `60m` — minimum interval for time-based restarts. |
+| Memory pressure recovery | `off` — opt in to sustained, Copilot-attributed commit-pressure recovery; see the plugin README. |
+
+Memory recovery checks about once a minute. At 85% committed memory it waits for
+verified quiet; at 95% it may interrupt active work after a short graceful-close
+attempt. Both require sustained fresh evidence and a significant Copilot contribution.
+Memory-triggered recovery uses its own 10-minute cooldown measured from any restart
+attempt, including failed attempts. It does not reboot Windows or change the pagefile.
 
 Durations accept `3h` or `180m` (a bare number means the unit named in the row). `Enabled`
 accepts `on`/`off`. A row that cannot be read — an unknown setting name, an out-of-range

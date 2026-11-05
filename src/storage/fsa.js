@@ -2,6 +2,7 @@ import { get, set, del } from 'idb-keyval'
 import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 import { scaffoldAgentGate } from '../config/agentGate.js'
+import { parseTodos as parseJournalTodos } from '../journalChat.js'
 
 const HANDLE_DB_KEY = 'focus-planner-dir-handle'
 
@@ -90,26 +91,7 @@ export async function journalExists(dirHandle, taskId) {
 }
 
 export function parseTodos(content) {
-  const normalized = content.replace(/^\uFEFF/, '')
-  const lines = normalized.split(/\r?\n/)
-  const todos = []
-  for (const line of lines) {
-    const checkboxMatch = line.match(/^-\s*\[([ x])\]\s*(.+)/i)
-    if (checkboxMatch) {
-      todos.push({ done: checkboxMatch[1].toLowerCase() === 'x', text: checkboxMatch[2].trim() })
-      continue
-    }
-    const todoMatch = line.match(/^-\s*TODO:\s*(.+)/i)
-    if (todoMatch) {
-      todos.push({ done: false, text: todoMatch[1].trim() })
-      continue
-    }
-    const doneMatch = line.match(/^-\s*DONE:\s*(.+)/i)
-    if (doneMatch) {
-      todos.push({ done: true, text: doneMatch[1].trim() })
-    }
-  }
-  return todos
+  return parseJournalTodos(content)
 }
 
 async function listRecursive(dirHandle, prefix = '') {

@@ -171,10 +171,11 @@ export function validateResponseText(text) {
     reject('response.json requires version 1, a positive rev, revisions, and dispositions')
   }
   const revisions = response.revisions.map((r) => {
-    if (!object(r) || !integer(r.rev, 1) || !timestamp(r.at) || typeof r.summary !== 'string' || !r.summary) {
+    if (!object(r) || !integer(r.rev, 1) || !timestamp(r.at) || typeof r.summary !== 'string' || !r.summary
+      || (r.op !== undefined && (typeof r.op !== 'string' || !/^[A-Za-z0-9:_-]{16,120}$/.test(r.op)))) {
       reject('response.json contains an invalid revision')
     }
-    return known(r, ['rev', 'at', 'summary'])
+    return known(r, ['rev', 'at', 'summary', 'op'])
   })
   const dispositions = {}
   for (const [id, d] of Object.entries(response.dispositions)) {

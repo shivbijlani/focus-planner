@@ -11,11 +11,16 @@ import {
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import {
+  MEMORY_POLICY, MEMORY_RESTART_AUTHORIZATION, memoryRestartReason,
+  memoryStillRequiresRestart, observeMemory,
+} from "./memory-pressure.mjs";
 
 export const HARD_RESTART_AUTHORIZATION = "explicit-user-approval:hard-preventive-deadline";
 
 export const DEFAULT_CONFIG = Object.freeze({
   version: 1,
+  memoryPressure: { enabled: false },
   preventiveRestart: {
     targetIntervalHours: 3,
     hardIntervalHours: 4,
@@ -181,6 +186,9 @@ export function validateConfig(input = {}) {
   }
   if (typeof config.supervisor.enabled !== "boolean") {
     throw new Error("config.supervisor.enabled must be boolean");
+  }
+  if (typeof config.memoryPressure.enabled !== "boolean") {
+    throw new Error("config.memoryPressure.enabled must be boolean");
   }
   if (typeof config.stuckRunRepair.autoRepairStuckRuns !== "boolean") {
     throw new Error("config.stuckRunRepair.autoRepairStuckRuns must be boolean");
@@ -605,6 +613,7 @@ export function initialState() {
     lastObservedApp: null,
     lastSuccessfulRestartAt: null,
     restartCycleStartedAt: null,
+    memoryPressure: null,
     updatedAt: null,
   };
 }
@@ -790,6 +799,8 @@ export function determineReason(input, config, state, nowMs = Date.now()) {
   if (!app?.running) {
     return { due: false, reason: null, blockedBy: "app-not-running" };
   }
+  const memoryReason = memoryRestartReason(input, config, state, nowMs);
+  if (memoryReason) return memoryReason;
   const observedStart = validDate(state.restartCycleStartedAt ?? app.startedAt);
   if (observedStart === null) {
     return { due: false, reason: null, blockedBy: "app-age-unknown" };
@@ -1228,7 +1239,9 @@ export function createSupervisor({
         await saveState(statePath, state, policy, clock.now());
       }
       const respond = (status, extra = {}) => result(status, {
-        cycle: restartCycleStatus(state, policy), ...extra,
+        cycle: restartCycleStatus(state, policy),
+        ...(policy.memoryPressure.enabled ? { memory: state.memoryPressure } : {}),
+        ...extra,
       });
       if (state.activeAttempt) {
         const active = state.attempts.find((item) => item.id === state.activeAttempt);
@@ -1247,6 +1260,11 @@ export function createSupervisor({
 
       const inspection = await adapters.inspect(input);
       const combined = { ...input, ...inspection, app: inspection?.app ?? input.app };
+      if (policy.memoryPressure.enabled) {
+        state.memoryPressure = observeMemory(combined.memory, combined.app, state.memoryPressure, clock.now());
+        await lock.assertOwned();
+        await saveState(statePath, state, policy, clock.now());
+      }
       const currentAppStartedAt = validDate(combined.app?.startedAt);
       if (
         sameTarget(combined.app, combined.app?.identity) &&
@@ -1270,7 +1288,10 @@ export function createSupervisor({
       const reason = determineReason(combined, policy, state, clock.now());
       if (!reason.due) return respond("not-due", { blockedBy: reason.blockedBy, reason });
 
-      const cooldown = cooldownStatus(state, policy, clock.now());
+      const cooldownPolicy = reason.trigger === "memory-pressure"
+        ? { ...policy, appRestart: { ...policy.appRestart, minIntervalMinutes: MEMORY_POLICY.cooldownMinutes } }
+        : policy;
+      const cooldown = cooldownStatus(state, cooldownPolicy, clock.now());
       if (!cooldown.allowed) return respond("cooldown", { reason, cooldown });
 
       const attempt = newAttempt(reason.reason, reason.trigger, policy, combined, clock.now());
@@ -1280,6 +1301,10 @@ export function createSupervisor({
       attempt.cycleBefore = restartCycleStatus(state, policy);
       attempt.cycleResetAt = null;
       attempt.activityOverridden = false;
+      if (reason.trigger === "memory-pressure") {
+        attempt.evidence.memory = bounded(combined.memory, policy);
+        attempt.evidence.memoryConfirmation = bounded(state.memoryPressure, policy);
+      }
       state.attempts.push(attempt);
       state.activeAttempt = attempt.id;
       await lock.assertOwned();
@@ -1287,6 +1312,7 @@ export function createSupervisor({
 
       try {
         const promoteHardDeadline = async () => {
+          if (reason.trigger === "memory-pressure") return;
           if (clock.now() >= validDate(attempt.cycleBefore?.hardDeadlineAt)) {
             attempt.restartMode = "hard-deadline";
             attempt.trigger = "hard-deadline";
@@ -1296,7 +1322,7 @@ export function createSupervisor({
           await lock.assertOwned();
           if (activity) {
             attempt.activity.push({ stage: "pre-force", ...bounded(activity, policy) });
-            if (attempt.restartMode === "hard-deadline" && activity.verdict !== "idle") {
+            if (["hard-deadline", "memory-critical"].includes(attempt.restartMode) && activity.verdict !== "idle") {
               attempt.activityOverridden = true;
             }
           }
@@ -1304,7 +1330,7 @@ export function createSupervisor({
             attempt.restartIntentAt = iso(clock.now());
             attempt.restartIntentPersisted = true;
           }
-          attempt.phase = attempt.restartMode === "hard-deadline" ? "force-requested" : "shutdown-requested";
+          attempt.phase = ["hard-deadline", "memory-critical"].includes(attempt.restartMode) ? "force-requested" : "shutdown-requested";
           await persist(state, attempt);
           await lock.assertOwned();
         };
@@ -1318,7 +1344,12 @@ export function createSupervisor({
         attempt.exclusions = bounded(firstActivity.exclusions, policy);
         await promoteHardDeadline();
         await persist(state, attempt);
-        if (attempt.restartMode !== "hard-deadline" && firstActivity.verdict !== "idle") {
+        if (reason.trigger === "memory-pressure" &&
+            !memoryStillRequiresRestart(before.memory, before.app, attempt.restartMode, clock.now())) {
+          await complete(state, attempt, "postponed-memory-recovered");
+          return respond("postponed", { attempt, blockedBy: "memory-pressure-not-confirmed-on-recheck" });
+        }
+        if (!["hard-deadline", "memory-critical"].includes(attempt.restartMode) && firstActivity.verdict !== "idle") {
           await complete(state, attempt, `postponed-${firstActivity.verdict}`);
           return respond("postponed", { attempt, activity: firstActivity });
         }
@@ -1332,11 +1363,16 @@ export function createSupervisor({
           await complete(state, attempt, "postponed-target-identity");
           return respond("postponed", { attempt, blockedBy: "target-identity-unknown-or-changed" });
         }
+        if (reason.trigger === "memory-pressure" &&
+            !memoryStillRequiresRestart(after.memory, after.app, attempt.restartMode, clock.now())) {
+          await complete(state, attempt, "postponed-memory-recovered");
+          return respond("postponed", { attempt, blockedBy: "memory-pressure-not-confirmed-on-recheck" });
+        }
         const versionChanged =
           firstActivity.admissionVersion !== null &&
           secondActivity.admissionVersion !== null &&
           firstActivity.admissionVersion !== secondActivity.admissionVersion;
-        if (attempt.restartMode !== "hard-deadline" && (versionChanged || secondActivity.verdict !== "idle")) {
+        if (!["hard-deadline", "memory-critical"].includes(attempt.restartMode) && (versionChanged || secondActivity.verdict !== "idle")) {
           await complete(state, attempt, "postponed-new-work-race");
           return respond("postponed", {
             attempt,
@@ -1345,7 +1381,7 @@ export function createSupervisor({
           });
         }
 
-        attempt.activityOverridden = attempt.restartMode === "hard-deadline" &&
+        attempt.activityOverridden = ["hard-deadline", "memory-critical"].includes(attempt.restartMode) &&
           (firstActivity.verdict !== "idle" || secondActivity.verdict !== "idle" || versionChanged);
         await persist(state, attempt);
         await lock.assertOwned();
@@ -1357,13 +1393,25 @@ export function createSupervisor({
           expectedOldIdentity: attempt.oldIdentity,
           forceDeadlineSeconds: policy.startup.forceTerminationDeadlineSeconds,
           forceAuthorization: policy.appRestart.forceTerminationAuthorization,
-          hardDeadlineAt: attempt.cycleBefore.hardDeadlineAt,
+          hardDeadlineAt: reason.trigger === "memory-pressure" ? null : attempt.cycleBefore.hardDeadlineAt,
+          memoryRecovery: reason.trigger === "memory-pressure",
+          restartMode: attempt.restartMode,
           onHardDeadline: promoteHardDeadline,
           beforeTerminate,
           assertActionOwned: () => lock.assertOwned(),
         };
         let shutdownCompletion;
-        if (attempt.restartMode === "hard-deadline") {
+        if (attempt.restartMode === "memory-critical") {
+          attempt.shutdown = bounded(timeoutResult(
+            await adapters.requestShutdown({ ...shutdownOptions, gracefulOnly: true }),
+            "critical memory graceful shutdown request",
+          ), policy);
+          await persist(state, attempt);
+          shutdownCompletion = timeoutResult(await adapters.awaitShutdown({
+            ...shutdownOptions, deadlineSeconds: Math.min(15, shutdownOptions.deadlineSeconds),
+            forceAuthorization: MEMORY_RESTART_AUTHORIZATION,
+          }), "critical memory shutdown");
+        } else if (attempt.restartMode === "hard-deadline") {
           shutdownCompletion = timeoutResult(await adapters.forceShutdown({
             ...shutdownOptions, forceAuthorization: HARD_RESTART_AUTHORIZATION,
           }), "hard preventive shutdown");
@@ -1591,9 +1639,13 @@ export function commandAdapters(
     attemptId, expectedOldIdentity, forceDeadlineSeconds, forceAuthorization,
     restartMode = "quiet-opportunity", assertActionOwned = async () => {},
     beforeTerminate = async () => {},
-    hardDeadlineAt, onHardDeadline = async () => {},
+    hardDeadlineAt, onHardDeadline = async () => {}, memoryRecovery = false,
   }) {
     let hard = restartMode === "hard-deadline";
+    const critical = restartMode === "memory-critical";
+    if (critical && (!config.memoryPressure.enabled || forceAuthorization !== MEMORY_RESTART_AUTHORIZATION)) {
+      return { ok: false, error: "critical memory shutdown requires opt-in and explicit authorization" };
+    }
     if (hard && forceAuthorization !== HARD_RESTART_AUTHORIZATION) {
       return { ok: false, error: "hard preventive shutdown requires explicit hard-deadline authorization" };
     }
@@ -1601,6 +1653,10 @@ export function commandAdapters(
       return { ok: false, error: "force fallback is not configured" };
     }
     const forceSnapshot = await freshSnapshot({ attemptId, recheck: "force" });
+    if ((memoryRecovery || critical) && !memoryStillRequiresRestart(
+      forceSnapshot.memory, forceSnapshot.app, restartMode, clock.now())) {
+      return { ok: false, error: "memory pressure cleared or became unobservable before force" };
+    }
     // Collection can cross the original deadline after graceful waiting finished.
     const hardAt = validDate(hardDeadlineAt);
     if (!hard && hardAt !== null && clock.now() >= hardAt) {
@@ -1610,7 +1666,7 @@ export function commandAdapters(
       await onHardDeadline();
     }
     const forceActivity = assessActivity(forceSnapshot.activity, config, clock.now());
-    if (!hard && forceActivity.verdict !== "idle") {
+    if (!hard && !critical && forceActivity.verdict !== "idle") {
       return { ok: false, error: `force fallback vetoed by ${forceActivity.verdict} activity evidence`,
         activity: forceActivity };
     }
@@ -1642,7 +1698,7 @@ export function commandAdapters(
     }
     return {
       ok: true, method: forceResult.method ?? "verified-process-tree-force",
-      restartMode, activityOverridden: hard && forceActivity.verdict !== "idle",
+      restartMode, activityOverridden: (hard || critical) && forceActivity.verdict !== "idle",
       authorization: forceAuthorization, activity: forceActivity, identity: expectedOldIdentity,
       rootPid: forceResult.rootPid ?? expectedOldIdentity.pid,
       terminatedPids: forceResult.terminatedPids ?? [expectedOldIdentity.pid],
@@ -1686,6 +1742,8 @@ export function commandAdapters(
       beforeTerminate = async () => {},
       hardDeadlineAt,
       onHardDeadline = async () => {},
+      memoryRecovery = false,
+      restartMode = "quiet-opportunity",
     }) {
       const expected = identityKey(expectedOldIdentity);
       const hardAt = validDate(hardDeadlineAt);
@@ -1715,8 +1773,9 @@ export function commandAdapters(
       return forceAndVerify({
         attemptId, expectedOldIdentity, forceDeadlineSeconds, assertActionOwned, beforeTerminate,
         hardDeadlineAt, onHardDeadline,
+        memoryRecovery,
         forceAuthorization: hard ? HARD_RESTART_AUTHORIZATION : forceAuthorization,
-        restartMode: hard ? "hard-deadline" : "quiet-opportunity",
+        restartMode: hard ? "hard-deadline" : restartMode,
       });
     },
     forceShutdown: (options) => forceAndVerify({ ...options, restartMode: "hard-deadline" }),

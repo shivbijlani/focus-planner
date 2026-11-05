@@ -264,7 +264,8 @@ reduced before sync.
 Root fields: `version: 1`, current `rev` (integer ≥ 1), `revisions` (newest 20 revision summaries),
 `dispositions` keyed by comment id, and optional `ackedReview`.
 
-Each revision summary has `rev`, UTC `at`, and `summary`. The array is ordered newest first and
+Each revision summary has `rev`, UTC `at`, `summary`, and an optional `op` (the operation
+id of the remote-agent publish that created it). The array is ordered newest first and
 includes the current revision. Each disposition has a `status` of
 `answered`, `done`, `needs-you`, or `declined`; the revision that made it; one or more response
 `blocks`; and optional short `note`. The answer itself belongs in `doc.md`, not only in `note`.
@@ -487,6 +488,21 @@ review permits its response within the same wake window without permitting dupli
 The `index.json.tasks` map replaces title search and Google-doc-id mapping for task binding.
 Google Docs-specific workarounds, GitHub-issue handling, gh-issue-work changes, and the S3
 `AGENTS.md` scaffold update are outside this v1 contract.
+
+### Remote agents over OneDrive (`planner-tools`)
+
+Agents without the planner folder on disk (Muse, chat MCP) use the `docs_read` and
+`docs_publish` tools in `packages/planner-tools`. They run this same publisher and
+docs-core code against fetched OneDrive snapshots and turn the publish into conditional
+Graph writes (If-Match / If-None-Match); those preconditions replace the local process
+lock. Writes keep the publisher order (history, `doc.md`, `response.json`, `index.json`)
+and never touch `review.json`. Revision summaries may carry an optional `op` (the
+caller's operation id) so a retried publish is recognised. Graph has no multi-file
+transaction, so the next call repairs an interrupted set: a body one revision ahead of
+its response is restored from its history snapshot; a body and response one revision
+ahead of the index are rolled forward into the index. Any other disagreement is refused.
+History is not trimmed over Graph. `user-settings.md` is unreadable to these tools, so
+the first-doc threshold is the default and `force` is explicit.
 
 ## Test vectors
 

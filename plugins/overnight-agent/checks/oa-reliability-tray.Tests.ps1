@@ -109,6 +109,7 @@ try {
   Assert-True (Test-Path (Join-Path $files.home 'reliability-supervisor.mjs')) '-Enable deploys the reliability engine'
   Assert-True (Test-Path (Join-Path $files.home 'consumer-reliability-supervisor.mjs')) '-Enable deploys the consumer wrapper'
   Assert-True (Test-Path (Join-Path $files.home 'oa-user-settings.mjs')) '-Enable deploys the user-settings policy reader'
+  Assert-True (Test-Path (Join-Path $files.home 'settings-value.mjs')) '-Enable deploys the settings reader dependency'
   foreach ($browserFile in 'consumer-browser-watchdog.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
       'browser-slot-table.ps1') {
     Assert-True (Test-Path (Join-Path $files.home $browserFile)) "-Enable deploys the reused browser tool $browserFile"
@@ -188,30 +189,59 @@ else { console.error('unexpected: ' + args); process.exit(9); }
   $env:OA_COPILOT_CLI = $fakeCli
   $env:OA_FAKE_COPILOT_CALLS = $fakeCalls
 
-  # ---- Headless tray: browser checks are OFF by default and pause is not persisted ----
-  function Invoke-HeadlessTray([string[]]$SettingsLines, [scriptblock]$Done) {
+  $guiRunner = Join-Path $root.FullName 'tray-gui-runner.ps1'
+  [IO.File]::WriteAllText($guiRunner, @'
+param([string]$TrayPath)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::SetUnhandledExceptionMode(
+  [System.Windows.Forms.UnhandledExceptionMode]::ThrowException)
+try { & $TrayPath -NoAct } catch {
+  [Console]::Error.WriteLine(($_ | Out-String))
+  exit 1
+}
+'@)
+
+  # ---- Browser checks are OFF by default and pause is not persisted ----
+  function Invoke-TestTray([string[]]$SettingsLines, [scriptblock]$Done, [switch]$WithTrayIcon) {
     $settingsPath = Join-Path $root.FullName 'user-settings.md'
     Set-Content -LiteralPath $settingsPath -Encoding utf8 -Value $SettingsLines
     $originalSettings = $env:OVERNIGHT_AGENT_SETTINGS
     $env:OVERNIGHT_AGENT_SETTINGS = $settingsPath
     try {
       Remove-Item -LiteralPath $files.heartbeat -Force -ErrorAction SilentlyContinue
-      $trayProcess = Start-Process -FilePath $psExe -PassThru -WindowStyle Hidden -ArgumentList @(
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-        (Join-Path $checksDir 'oa-supervisor-tray.ps1'), '-NoTrayIcon', '-NoAct')
+      $trayPath = Join-Path $checksDir 'oa-supervisor-tray.ps1'
+      $trayArgs = @('-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File')
+      if ($WithTrayIcon) { $trayArgs += @("`"$guiRunner`"", '-TrayPath', "`"$trayPath`"") }
+      else { $trayArgs += @("`"$trayPath`"", '-NoTrayIcon', '-NoAct') }
+      $stderrPath = Join-Path $root.FullName 'tray-stderr.txt'
+      $trayProcess = Start-Process -FilePath $psExe -PassThru -WindowStyle Hidden -ArgumentList $trayArgs `
+        -RedirectStandardError $stderrPath
       $null = $trayProcess.Handle
       $heartbeat = $null
       $deadline = (Get-Date).AddSeconds(90)
       while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 500
+        if ($trayProcess.HasExited) { break }
         try { $heartbeat = Get-Content -LiteralPath $files.heartbeat -Raw -ErrorAction Stop | ConvertFrom-Json } catch { continue }
+        if ($heartbeat.browser.state -eq 'CHECK-FAILED' -or $heartbeat.update.state -eq 'CHECK-FAILED') { break }
         if ($heartbeat.browser -and (& $Done $heartbeat)) { break }
+      }
+      if ($WithTrayIcon -and -not $trayProcess.HasExited) {
+        Start-Sleep -Seconds 3
+        Assert-True (-not $trayProcess.HasExited) 'the real tray survives successive Windows Forms timer ticks'
       }
       @{ pid = $trayProcess.Id; requestedUtc = (Get-Date).ToUniversalTime().ToString('o') } |
         ConvertTo-Json | Set-Content -LiteralPath $files.stopRequest -Encoding utf8
       $exited = $trayProcess.WaitForExit(30000)
       if (-not $exited) { Stop-Process -Id $trayProcess.Id -Force -ErrorAction SilentlyContinue }
-      Assert-True $exited 'headless tray exits on a stop request'
+      Assert-True $exited 'tray exits on a stop request'
+      if ($exited) { Assert-Equal $trayProcess.ExitCode 0 'tray exits successfully' }
+      $stderrText = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+      Assert-True (-not $stderrText) "tray reports no unhandled errors: $stderrText"
+      if (-not $heartbeat -or -not (& $Done $heartbeat)) {
+        throw "Tray did not reach the expected state. Heartbeat: $($heartbeat | ConvertTo-Json -Depth 5 -Compress). Errors: $stderrText"
+      }
       return $heartbeat
     } finally {
       if ($null -eq $originalSettings) { Remove-Item Env:\OVERNIGHT_AGENT_SETTINGS -ErrorAction SilentlyContinue }
@@ -221,7 +251,7 @@ else { console.error('unexpected: ' + args); process.exit(9); }
   $reliabilityOff = @('# settings', '', '## Tray reliability supervision', '', '| Setting | Value |',
     '| --- | --- |', '| Enabled | `off` |', '')
 
-  $heartbeat = Invoke-HeadlessTray $reliabilityOff { param($h) $h.browser.state -eq 'DISABLED' -and -not $h.browser.running }
+  $heartbeat = Invoke-TestTray $reliabilityOff { param($h) $h.browser.state -eq 'DISABLED' -and -not $h.browser.running }
   Assert-True ($heartbeat -and $heartbeat.browser) 'the tray heartbeat carries a separate browser section'
   Assert-Equal $heartbeat.browser.state 'DISABLED' 'headless tray: browser checks are off by default'
   Assert-Equal $heartbeat.browser.paused $false 'a fresh tray starts with browser checks unpaused (pause is not persisted)'
@@ -233,7 +263,7 @@ else { console.error('unexpected: ' + args); process.exit(9); }
   # ATTENTION outcome in its own state file, and no browser port is ever contacted.
   $observeOn = $reliabilityOff + @('## Tray browser checks', '', '| Setting | Value |', '| --- | --- |',
     '| Enabled | `on` |', '| Observe | `on` |', '')
-  $heartbeat = Invoke-HeadlessTray $observeOn { param($h) $h.browser.lastCheckUtc -and -not $h.browser.running }
+  $heartbeat = Invoke-TestTray $observeOn { param($h) $h.browser.lastCheckUtc -and -not $h.browser.running }
   Assert-Equal $heartbeat.browser.state 'ATTENTION' 'an opted-in check with no slot table is dispatched and needs attention'
   $recorded = Get-Content -LiteralPath $files.browserState -Raw | ConvertFrom-Json
   Assert-Equal @($recorded.recent)[-1].mode 'observe' 'the -NoAct tray runs the opted-in check as observe-only'
@@ -252,7 +282,7 @@ else { console.error('unexpected: ' + args); process.exit(9); }
   function Get-FakeCalls { @((Get-Content -LiteralPath $fakeCalls -ErrorAction SilentlyContinue) | Where-Object { $_ }) }
 
   Reset-UpdateFixture
-  $heartbeat = Invoke-HeadlessTray $reliabilityOff $updateDone
+  $heartbeat = Invoke-TestTray $reliabilityOff $updateDone
   Assert-True ($heartbeat -and $heartbeat.update) 'the tray heartbeat carries a separate update section'
   Assert-Equal $heartbeat.update.state 'UPDATE-AVAILABLE' 'headless tray: update checks run by default and report an available update'
   Assert-True $heartbeat.update.updateAvailable 'the tray flags update available'
@@ -271,7 +301,7 @@ else { console.error('unexpected: ' + args); process.exit(9); }
 
   # A tray restart inside the interval adds no check: the workload is idempotent.
   Set-Content -LiteralPath $fakeCalls -Value '' -NoNewline
-  $heartbeat = Invoke-HeadlessTray $reliabilityOff $updateDone
+  $heartbeat = Invoke-TestTray $reliabilityOff $updateDone
   Assert-Equal @(Get-FakeCalls).Count 0 'a restarted tray inside the daily interval runs no CLI at all'
   Assert-Equal $heartbeat.update.state 'UPDATE-AVAILABLE' 'the restarted tray still shows the recorded result'
 
@@ -279,7 +309,7 @@ else { console.error('unexpected: ' + args); process.exit(9); }
   Reset-UpdateFixture
   $autoApply = $reliabilityOff + @('## Tray update checks', '', '| Setting | Value |', '| --- | --- |',
     '| Check interval | `hourly` |', '| Auto apply | `on` |', '')
-  $heartbeat = Invoke-HeadlessTray $autoApply $updateDone
+  $heartbeat = Invoke-TestTray $autoApply $updateDone
   Assert-Equal $heartbeat.update.state 'UPDATE-AVAILABLE' 'a -NoAct tray only reports even with Auto apply on'
   Assert-True (-not (Get-FakeCalls | Where-Object { $_ -like 'plugin install*' })) '-NoAct never installs'
 
@@ -287,10 +317,14 @@ else { console.error('unexpected: ' + args); process.exit(9); }
   Reset-UpdateFixture
   $updatesOff = $reliabilityOff + @('## Tray update checks', '', '| Setting | Value |', '| --- | --- |',
     '| Enabled | `off` |', '')
-  $heartbeat = Invoke-HeadlessTray $updatesOff $updateDone
+  $heartbeat = Invoke-TestTray $updatesOff $updateDone
   Assert-Equal $heartbeat.update.state 'DISABLED' 'Enabled = off turns the update workload off'
   Assert-Equal @(Get-FakeCalls).Count 0 'a disabled update workload runs no CLI'
   Assert-True (-not (Test-Path $files.updateState)) 'a disabled update workload writes no state'
+
+  # Exercise the production UI path, which -NoTrayIcon deliberately skips.
+  $heartbeat = Invoke-TestTray $updatesOff $updateDone -WithTrayIcon
+  Assert-Equal $heartbeat.update.state 'DISABLED' 'the real tray completes its first timer-driven evaluation'
 } finally {
   if ($null -eq $originalCli) { Remove-Item Env:\OA_COPILOT_CLI -ErrorAction SilentlyContinue } else { $env:OA_COPILOT_CLI = $originalCli }
   if ($null -eq $originalCalls) { Remove-Item Env:\OA_FAKE_COPILOT_CALLS -ErrorAction SilentlyContinue } else { $env:OA_FAKE_COPILOT_CALLS = $originalCalls }

@@ -21,7 +21,8 @@ function navigatesFromSettingsDialog() {
 test('agent gate editor: add a line, save, and it survives a reload', async ({ page }) => {
   await openPlanner(page)
   const openGate = async () => {
-    await page.getByRole('button', { name: /agent-gate\.md/ }).click()
+    const dialog = await openSettings(page)
+    await dialog.getByRole('button', { name: 'Open agent-gate.md' }).click()
     await expect(page.getByRole('heading', { name: 'Agent gate' })).toBeVisible()
   }
 

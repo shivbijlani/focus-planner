@@ -9,6 +9,7 @@
 
 import { generateCodeVerifier, generateCodeChallenge, generateState } from '../auth/pkce.js'
 import { getTokens, setTokens, clearTokens, isExpired } from '../auth/tokenStore.js'
+import { fetchWithTimeout as fetch } from '../fetchWithTimeout.js'
 
 const PROVIDER_ID = 'onedrive'
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'

@@ -28,6 +28,19 @@ function status(oneDrive, googleDrive = TARGET_STATUS.DISCONNECTED, aggregate) {
 }
 
 describe('syncStatusEqual', () => {
+  it('does not call an idle, connected provider backed up before a worker result', () => {
+    engineStatus.current = { state: 'idle', providers: { onedrive: { connected: true, state: 'idle' } } }
+    expect(getSyncStatus().aggregate).toBe(TARGET_STATUS.PENDING)
+  })
+  it('shows pending counts and does not let a busy target hide another target failure', () => {
+    engineStatus.current = { state: 'syncing', providers: {
+      onedrive: { connected: true, state: 'syncing', pending: 141 },
+      'google-drive': { connected: false, state: 'reconnect-required', error: 'reconnect-required' },
+    } }
+    const status = getSyncStatus()
+    expect(status.aggregate).toBe(TARGET_STATUS.RECONNECT_NEEDED)
+    expect(status.folders['browser-storage'].targets.onedrive.message).toBe('141 file(s) pending')
+  })
   it('surfaces local replica failures rather than showing idle connected targets as backed up', () => {
     engineStatus.current = {
       state: 'error',

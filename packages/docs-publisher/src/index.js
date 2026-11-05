@@ -1,3 +1,4 @@
 export {
-  DocsPublisherError, lintDraft, publish, readComments, readStatus, readStatuses, acknowledgeReview, writeAtomically,
+  DocsPublisherError, lintDraft, publish, publishUnlocked, readComments, readStatus, readStatuses,
+  acknowledgeReview, acknowledgeReviewUnlocked, writeAtomically,
 } from './publisher.js'

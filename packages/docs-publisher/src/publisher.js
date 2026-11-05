@@ -505,11 +505,21 @@ export async function publish(options) {
   })
 }
 
-async function publishUnlocked({
+/**
+ * The publish algorithm without the local process lock, for callers whose
+ * storage already serializes writers (planner-tools plans conditional Graph
+ * writes against a snapshot-backed `io`). `operation`, when given, is recorded
+ * on the new revision summary so a retried request can recognise its own
+ * completed publish.
+ */
+export async function publishUnlocked({
   root, task, draft, summary, baseRev, force = false, adoptExternalEdit = false,
   checkLinks = false, linked = [], dispositions = [], partial = false, reason = '',
-  io = fs.promises, now, makeId,
+  io = fs.promises, now, makeId, operation,
 }) {
+  if (operation !== undefined && (typeof operation !== 'string' || !/^[A-Za-z0-9:_-]{16,120}$/.test(operation))) {
+    fail('D09 data', 'operation must be 16-120 characters of letters, digits, ":", "_" or "-"', 'pass a stable operation id')
+  }
   if (!Number.isSafeInteger(Number(task)) || Number(task) < 1) {
     fail('D08 binding', 'task must be a positive integer', 'pass --task N')
   }
@@ -692,7 +702,7 @@ async function publishUnlocked({
       version: 1,
       rev: nextRev,
       revisions: [
-        { rev: nextRev, at: published, summary: summary.trim() },
+        { rev: nextRev, at: published, summary: summary.trim(), ...(operation ? { op: operation } : {}) },
         ...(oldResponse?.revisions || []),
       ].slice(0, 20),
       dispositions: oldResponse?.dispositions || {},
@@ -1002,7 +1012,7 @@ export async function acknowledgeReview(options) {
   })
 }
 
-async function acknowledgeReviewUnlocked({ root, task, review: reviewId, doc, io = fs.promises }) {
+export async function acknowledgeReviewUnlocked({ root, task, review: reviewId, doc, io = fs.promises }) {
   const status = await readStatus({ root, task, io })
   const matches = []
   for (const entry of status.docs) {
