@@ -121,7 +121,30 @@ export function makeNormalizer({ t0, pathTokens, keepGuids = new Set() }) {
     return v;
   }
 
-  return { text, value };
+  function docOutput(v, { command, before, after }) {
+    const field = command === 'scan' ? 'doc_observed_at' : 'observed_at';
+    const normalizeRow = (row) => {
+      if (!row || typeof row !== 'object') return value(row);
+      const source = before.get(String(row.id))?.doc;
+      const current = after.get(String(row.id))?.doc;
+      const iso = source?.observed_at;
+      // Interpolation discards DateTime.Kind. Recover it only from an unchanged, matching
+      // sandbox record, never from the output field name or the invariant digits alone.
+      if (typeof iso !== 'string' || !iso.endsWith('Z') ||
+          source.doc_id !== row.doc_id || current?.doc_id !== source.doc_id ||
+          current.observed_at !== iso) return value(row);
+      const ms = Date.parse(iso);
+      if (Number.isNaN(ms) || Math.abs(ms - t0) > WINDOW_DAYS * DAY_MS) return value(row);
+      const d = new Date(ms);
+      const pad = (n) => String(n).padStart(2, '0');
+      const invariant = `${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())}/${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+      if (row[field] !== invariant) return value(row);
+      return value({ ...row, [field]: fmtDelta('INVTIME', bucket(ms - t0), 'm') });
+    };
+    return Array.isArray(v) ? v.map(normalizeRow) : normalizeRow(v);
+  }
+
+  return { text, value, docOutput };
 }
 
 // PowerShell error decoration carries script line numbers, source excerpts, a `<script>.ps1:`

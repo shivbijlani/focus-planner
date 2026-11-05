@@ -65,6 +65,22 @@ Nothing semantic is normalised. Because the clock window is ±45 days, **fixed d
 must be far from any run date** -- the fixtures use 2020 for "long ago" and 2099 for "far
 future". Anything that must be relative to now uses a clock token (below).
 
+For `oa-state scan` / `doc` observation output, interpolation drops `DateTime.Kind`.
+The harness recovers UTC provenance only when the matching task/document has the
+same `Z`-suffixed observation in sandbox state before and after the command, and
+the output exactly matches its UTC invariant rendering. The delta then uses
+that UTC instant while retaining the `INVTIME` format marker. Local, Unspecified,
+changed, or unproven observations still use ordinary invariant normalization.
+This avoids seasonal Pacific offsets becoming part of the five doc-observation
+goldens without globally treating invariant timestamps as UTC.
+
+`node --test plugins/overnight-agent/tests/characterization/lib/doc-observation.test.mjs`
+replays those five output shapes against their actual fixtures at fixed summer
+and winter clocks in isolated Pacific and UTC subprocesses. It also checks local,
+offset-bearing and mismatched-provenance controls. This synthetic normalization
+replay is separate from running the real PowerShell/Node five-case commands at
+the current clock; it does not freeze either production runtime.
+
 **Time zone is pinned, not normalised.** PowerShell renders some timestamps in local time (an ISO
 string read back from JSON becomes a local `[datetime]`; fixed 2020 times print as `-08:00`), so the
 goldens are tied to the zone they were recorded in, `America/Los_Angeles` (the owner's). `run.mjs`

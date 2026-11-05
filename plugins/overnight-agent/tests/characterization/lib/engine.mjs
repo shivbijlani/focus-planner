@@ -39,6 +39,17 @@ function describeFile(buf, n, rel) {
   return entry;
 }
 
+function docObservationSources(stateDir) {
+  const records = new Map();
+  if (!stateDir || !fs.existsSync(stateDir)) return records;
+  for (const name of fs.readdirSync(stateDir).filter((name) => /^task-.*\.json$/.test(name))) {
+    // Malformed state is deliberately exercised by cases; it cannot establish provenance.
+    const record = tryParseJson(fs.readFileSync(path.join(stateDir, name), 'utf8').replace(/^\uFEFF/, ''));
+    if (record?.id != null && record.doc) records.set(String(record.id), record);
+  }
+  return records;
+}
+
 export async function runCase(kase, { adapter, fixturesDir, skillDir, repoDir, stubsDir, keep = false, timeoutSeconds }) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'oa-char-')));
   const t0 = Date.now();
@@ -78,6 +89,8 @@ export async function runCase(kase, { adapter, fixturesDir, skillDir, repoDir, s
         caseArgs.BodyFile = bodyPath;
       }
       const args = resolveArgs(step.tool, caseArgs, dirs, { noDefaults: step.noDefaults });
+      const isDocOutput = step.tool === 'oa-state' && ['scan', 'doc'].includes(step.command);
+      const docBefore = isDocOutput ? docObservationSources(args.StateDir) : null;
       const res = await adapter.run({ tool: step.tool, command: step.command || '', args, stdin: step.stdin }, {
         root, dirs, cwd: dirs.cwd, env, skillDir, repoDir, timeoutSeconds,
       });
@@ -91,7 +104,9 @@ export async function runCase(kase, { adapter, fixturesDir, skillDir, repoDir, s
       if (step.args && Object.keys(step.args).length) rec.args = n.value(resolveArgs(step.tool, step.args, dirs, { noDefaults: true }));
       rec.exit = res.exit;
       if (step.record !== false) {
-        if (parsed !== undefined) rec.json = n.value(parsed);
+        if (parsed !== undefined) rec.json = isDocOutput
+          ? n.docOutput(parsed, { command: step.command, before: docBefore, after: docObservationSources(args.StateDir) })
+          : n.value(parsed);
         else {
           const lines = n.text(body).split('\n').map((l) => l.trimEnd());
           while (lines.length && !lines[lines.length - 1]) lines.pop();
