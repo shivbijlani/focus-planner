@@ -49,7 +49,7 @@
         "new_comment_ids": null,
         "new_comments": null,
         "observation": "unreadable",
-        "observed_at": "<INVTIME+60m>",
+        "observed_at": "<INVTIME-360m>",
         "seen_comments": 1,
         "source": "state"
       },

@@ -350,7 +350,7 @@
           "doc_channel": "fresh",
           "doc_id": "DOC905",
           "doc_new_comments": 1,
-          "doc_observed_at": "<INVTIME+390m>",
+          "doc_observed_at": "<INVTIME-30m>",
           "doc_source": "state",
           "due_poll": false,
           "due_recheck": false,
