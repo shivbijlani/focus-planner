@@ -8,6 +8,8 @@ The `root` domain contains the repository-level runtime and toolchain entry poin
 
 `vite.config.js` defines the browser bundle and test collector behaviour. Its build identifier comment explains why `__APP_BUILD__` exists: users need to confirm whether a PWA is running a stale service worker, and support needs a visible build stamp. The same file also excludes `plugins/**` from Vitest because some `plugins/overnight-agent/checks/*.test.mjs` files are standalone self-tests that require `%LOCALAPPDATA%`, shell out, and call `process.exit()`; collecting them as Vitest suites would make Linux CI fail for the wrong reason.
 
+The `e2e/` directory (for example `e2e/settings.spec.js`, covering the settings dialog, the agent editors and the storage providers offered today) holds the Playwright browser specs, run through `playwright.config.js`; `playwright.docs-seams.config.js` and `playwright.personal.config.js` select the Docs-seam and personal-deployment subsets.
+
 `eslint.config.js` is the flat lint contract. It applies browser globals to `**/*.{js,jsx}`, switches Node globals on for `packages/telegram-bridge/**/*.js` and `packages/task-paper/**/*.js`, and intentionally disables `react-refresh/only-export-components` in those Node-only directories.
 
 ## Principal modules and exports
