@@ -34,10 +34,10 @@ Every core design decision in this system exists to make that safe:
 
 ## How the pieces fit together
 
-Twelve domains divide the system: a browser-facing board (`app`), the on-disk formats and their
+Sixteen domains divide the system: a browser-facing board (`app`), the on-disk formats and their
 shared config (`config`, `storage`), a bidirectional sync engine (`folder-sync`), an autonomous
 overnight worker (`overnight-agent`), a Telegram mirror (`telegram-bridge`), a static journal
-publisher (`task-paper`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
+publisher (`task-paper`), native catch-up Docs (`docs-core`, `docs-publisher`), shared ordering rules (`planner-shared-core`), remote-agent tools over OneDrive (`planner-tools`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
 the server and build entry points (`root`), and repository tooling including this spec's own
 generation pipeline (`scripts`). See [Architecture](Architecture) for how they compose at runtime and
 [Rebuilding](Rebuilding) for the order to build them in.
@@ -59,6 +59,8 @@ generation pipeline (`scripts`). See [Architecture](Architecture) for how they c
 | [Domain-install-prompt](Domain-install-prompt) | The install/onboarding prompt UI (and its untested-code gap). |
 | [Domain-mcp-cred-vault](Domain-mcp-cred-vault) | Schema-validated credential storage for MCP servers. |
 | [Domain-overnight-agent](Domain-overnight-agent) | The autonomous work-loop plugin: state machine, run phases, self-healing checks. |
+| [Domain-planner-shared-core](Domain-planner-shared-core) | The one shared implementation of task ordering and move-with-dependants. |
+| [Domain-planner-tools](Domain-planner-tools) | CLI/MCP tools for remote agents: allowlisted, conditional, idempotent planner edits over OneDrive. |
 | [Domain-root](Domain-root) | The Express server, build entry points, and repo-wide lint config. |
 | [Domain-scripts](Domain-scripts) | Build glue, developer-safety scripts, and the spec generation pipeline. |
 | [Domain-storage](Domain-storage) | The multi-provider file storage abstraction underlying the board and sync. |
