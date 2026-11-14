@@ -38,6 +38,10 @@ than importing concrete provider implementations.
 | `mcp-cred-vault` | `packages/mcp-cred-vault/src/schema.js` | Validates the non-secret pointer file that tells a machine which credentials to pull from its OS vault. |
 | `install-prompt` | `packages/install-prompt/src/useInstallPrompt.js`, `packages/install-prompt/src/InstallModal.jsx` | Cross-platform "add to home screen" PWA install UX. |
 | `diagnostics` | `packages/diagnostics/src/index.js` | A shared, low-overhead event/tracing sink used by the app, its service worker, and folder-sync, so a live worker's state can be dumped on demand. |
+| `docs-core` | `packages/docs-core/src/doc.js`, `packages/docs-core/src/review.js`, `packages/docs-core/src/validate.js`, `packages/docs-core/src/anchor.js` | Shared Docs parsing, anchoring, review merge and validation ([Domain-docs-core](Domain-docs-core)). |
+| `docs-publisher` | `packages/docs-publisher/src/publisher.js`, `packages/docs-publisher/bin/fp-docs.js` | The sole writer of publisher-owned Docs files ([Domain-docs-publisher](Domain-docs-publisher)). |
+| `planner-shared-core` | `packages/planner-shared-core/src/taskSort.js`, `packages/planner-shared-core/src/taskMove.js` | The board sort key and move-set rules shared by the app and agent tools ([Domain-planner-shared-core](Domain-planner-shared-core)). |
+| `planner-tools` | `packages/planner-tools/src/operations.js`, `packages/planner-tools/src/plan.js`, `packages/planner-tools/src/paths.js` | Agent operations over OneDrive with a guardrail allowlist ([Domain-planner-tools](Domain-planner-tools)). |
 | `scripts` | `scripts/spec/collect.mjs`, `scripts/spec/verify.mjs`, `scripts/merge-queue.mjs` | Repo-maintenance tooling: this spec's own generation pipeline, dependency-hygiene guards, and merge-queue automation. See [Domain-scripts](Domain-scripts). |
 | `root` | `server.js`, `vite.config.js`, `eslint.config.js` | The dev/build toolchain and the one real backend process (below). |
 
