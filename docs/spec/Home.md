@@ -34,10 +34,12 @@ Every core design decision in this system exists to make that safe:
 
 ## How the pieces fit together
 
-Twelve domains divide the system: a browser-facing board (`app`), the on-disk formats and their
+Sixteen domains divide the system: a browser-facing board (`app`), the on-disk formats and their
 shared config (`config`, `storage`), a bidirectional sync engine (`folder-sync`), an autonomous
 overnight worker (`overnight-agent`), a Telegram mirror (`telegram-bridge`), a static journal
-publisher (`task-paper`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
+publisher (`task-paper`), native catch-up Docs (`docs-core`, `docs-publisher`), the ordering and
+move rules every surface shares (`planner-shared-core`), agent tools over OneDrive
+(`planner-tools`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
 the server and build entry points (`root`), and repository tooling including this spec's own
 generation pipeline (`scripts`). See [Architecture](Architecture) for how they compose at runtime and
 [Rebuilding](Rebuilding) for the order to build them in.
@@ -52,6 +54,10 @@ generation pipeline (`scripts`). See [Architecture](Architecture) for how they c
 | [Domain-docs](Domain-docs) | Native catch-up Docs: file ownership, data formats, block/comment preservation, publisher and agent-loop contracts, test vectors. |
 | [Domain-agent-metadata](Domain-agent-metadata) | Per-device agent metadata files and the 🤖 session link: fingerprints, publisher and reader rules, test vectors. |
 | [Domain-lanes](Domain-lanes) | Lanes: scope each agent PC to part of the plan — `#lane:` tags, app assignments and inheritance, `agent-lanes.json`, engine and app rules, test vectors. |
+| [Domain-docs-core](Domain-docs-core) | The shared Docs library: parsing, anchoring, review merge, derived state, validation. |
+| [Domain-docs-publisher](Domain-docs-publisher) | The sole Docs writer and `fp-docs` CLI: publish, lint, status, comments, acknowledge. |
+| [Domain-planner-shared-core](Domain-planner-shared-core) | The board sort key and move-with-dependents rules shared by every surface. |
+| [Domain-planner-tools](Domain-planner-tools) | Agent tools over OneDrive: plan/execute loop, guardrail allowlist, MCP and CLI. |
 | [Domain-app](Domain-app) | The board UI and its pure content-transformation core. |
 | [Domain-config](Domain-config) | Agent gate, user settings, `AGENTS.md`, and their write-safety guarantees. |
 | [Domain-diagnostics](Domain-diagnostics) | Structured, no-content-leak logging shared across storage providers. |

@@ -40,11 +40,13 @@ app.post('/api/config', async (req, res) => { ... })
 </details>
 Those route registrations in `server.js` are the whole backend surface. The implementation enforces required query/body parameters, checks that joined paths stay under the configured planner root, and returns conventional HTTP failures: `400` for missing input, `403` for access outside the planner root, `404` for missing reads, and `500` for write/config errors.
 
-## Behavioural requirements and current test gap
+## Behavioural requirements and tests
 
-`spec-facts.json` lists **no root-level `*.test.js` files** under `testFiles[]`. That is an important fact about this domain: its contract is presently enforced by code review, package scripts, and integration use rather than dedicated root-domain unit tests. The relevant repository scripts from `spec-facts.json` are `dev`, `server`, `start`, `build`, `lint`, `test`, and the `predev`/`prebuild` `copy-sw` step.
+`server.test.js` pins the local API: listing returns markdown files and folders only; reading a file returns 404 when it is missing and 400 without a path; writes round-trip through reads; paths that escape the planner folder are refused, including sibling-prefix, absolute and encoded traversal forms (#790); deletion removes a file; todo extraction understands checkbox and `TODO`/`DONE` items; and the journal-exists check reports non-empty journals only. The relevant repository scripts from `spec-facts.json` are `dev`, `server`, `start`, `build`, `lint`, `test`, and the `predev`/`prebuild` `copy-sw` step.
 
-Even without direct root tests, the code makes several required behaviours explicit:
+The browser end-to-end suite also belongs to this domain: Playwright specs under `e2e/` (board, journal, mobile, maintenance, Docs, lanes, agent metadata) drive the real app against the `playwright.config.js` configurations. `e2e/settings.spec.js` covers the Settings dialog: the agent-gate and agent-settings editors persist across reload, the mission statement persists and pins to the board, the storage choices offered are browser, local folder, OneDrive and Google Drive, the picker lists every provider when storage cannot start, switching a saved source reloads the board from that choice, and a failed or cancelled restore or OAuth switch leaves the previous source and saved choices intact.
+
+The code also makes several required behaviours explicit:
 
 - The local API serves only markdown content under the configured planner directory and skips hidden files and `node_modules` when listing.
 - `POST /api/pick-folder` shells out to `powershell.exe` and uses `System.Windows.Forms.FolderBrowserDialog`, so this endpoint is intentionally **Windows-specific**.
