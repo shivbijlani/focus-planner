@@ -40,6 +40,10 @@ than importing concrete provider implementations.
 | `diagnostics` | `packages/diagnostics/src/index.js` | A shared, low-overhead event/tracing sink used by the app, its service worker, and folder-sync, so a live worker's state can be dumped on demand. |
 | `scripts` | `scripts/spec/collect.mjs`, `scripts/spec/verify.mjs`, `scripts/merge-queue.mjs` | Repo-maintenance tooling: this spec's own generation pipeline, dependency-hygiene guards, and merge-queue automation. See [Domain-scripts](Domain-scripts). |
 | `root` | `server.js`, `vite.config.js`, `eslint.config.js` | The dev/build toolchain and the one real backend process (below). |
+| `docs-core` | `packages/docs-core/src/doc.js`, `packages/docs-core/src/anchor.js`, `packages/docs-core/src/review.js`, `packages/docs-core/src/validate.js` | Shared library defining the native catch-up Doc format. See [Domain-docs-core](Domain-docs-core). |
+| `docs-publisher` | `packages/docs-publisher/src/publisher.js`, `packages/docs-publisher/bin/fp-docs.js` | The sole atomic writer of an agent's side of a Doc. See [Domain-docs-publisher](Domain-docs-publisher). |
+| `planner-shared-core` | `packages/planner-shared-core/src/taskSort.js`, `packages/planner-shared-core/src/taskMove.js` | Pure task-ordering and move-set rules shared across builds. See [Domain-planner-shared-core](Domain-planner-shared-core). |
+| `planner-tools` | `packages/planner-tools/src/operations.js`, `packages/planner-tools/src/plan.js`, `packages/planner-tools/src/protocol.js` | Browserless agent tools that edit the planner on OneDrive through the UI's own mutation code. See [Domain-planner-tools](Domain-planner-tools). |
 
 </details>
 

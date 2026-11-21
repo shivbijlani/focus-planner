@@ -108,6 +108,25 @@ thing (or the other supervisor) it exists to catch failing. Full behavior, confi
 (`user-settings.md`), and troubleshooting live in `plugins/overnight-agent/README.md`; this page
 only records where it fits in the reliability stack.
 
+The decision engine behind that restart policy is one module, `plugins/overnight-agent/checks/reliability-supervisor.mjs`.
+It owns four things, each as a separate, testable function rather than inline script logic:
+
+- **Policy defaults.** The preventive restart targets a quiet moment every 3 hours and is forced
+  by a 4-hour hard deadline; a quiet window is 15 minutes; app restarts are at least 60 minutes apart; memory-pressure
+  recovery is off until enabled; the supervisor checks every 15 minutes and heartbeats every 15 seconds.
+- **Safety.** One exclusive action lock with a lease, so two checks cannot restart the app at once; a cooldown after any
+  restart; and a *hard* restart (which can interrupt active work) needs an explicit authorisation string, so the
+  deadline path is an approved exception and never a default.
+- **Activity assessment.** Evidence of whether sessions are busy is classified, and an incomplete read is reported as
+  incomplete rather than as "quiet" — the same guard-that-cannot-run-is-not-a-guard-with-nothing-to-do rule as
+  elsewhere in this page (open gap: #720, where 500+ sessions make the quiet-window evidence always incomplete).
+- **Stuck-run repair.** A run silent past a grace period is confirmed over a longer window before repair, and the
+  repair backs up what it changes before writing.
+
+State and configuration are written by atomic JSON swap with recovery of an interrupted swap, so a crash mid-write
+cannot leave a half-written supervisor state. Known gaps: the heartbeat records only the last check time, so a
+sleep-length blind window leaves no record (#638), and a cleanup restart interrupts unrelated active sessions (#643).
+
 The same reliability workload also offers an independent, default-off **Memory
 pressure recovery** setting. Sustained system commit pressure attributable to the
 verified Copilot process tree can trigger recovery before M: high pressure still
