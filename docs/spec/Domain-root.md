@@ -51,6 +51,10 @@ Even without direct root tests, the code makes several required behaviours expli
 - `vite.config.js` injects a build ID through `define.__APP_BUILD__` and sets `base: '/'`, which the app’s update UI and service-worker registration depend on.
 - `eslint.config.js` treats browser code and Node-side packages differently, so lint failures reflect the actual runtime environment of each subtree.
 
+## Browser end-to-end suite
+
+The root domain also holds the Playwright end-to-end specs under `e2e/` (board, journal, mobile, maintenance, settings, Docs, lanes and agent-metadata areas), with shared helpers in `e2e/helpers.js`. These are the only tests that exercise the real UI against a real storage provider, so they are the acceptance layer for user-visible behaviour. `e2e/settings.spec.js` pins the Settings dialog: the agent-gate and agent-settings editors save and survive a reload; the mission statement persists and pins to the board; the storage choices offered are browser, local folder, OneDrive and Google Drive; the picker still lists every provider when storage cannot start; switching a saved source reloads the board from it; a failed restore of the active source falls back without altering saved choices and offers reconnect; and cancelling a reconnect or an OAuth switch leaves the previous or selected source active. The suite is known to be flaky on `main` (#826), and an agent-sandbox baseline has standing failures (#804).
+
 ## Failure modes
 
 The root domain’s failures are operational rather than data-model failures. If `server.js` is wrong, the local desktop workflow breaks: the browser cannot browse or edit the planner folder, or the Windows folder picker fails. If `vite.config.js` is wrong, service workers can be served from the wrong place, build IDs disappear, or CI starts collecting non-Vitest plugin self-tests and fails spuriously. If `eslint.config.js` is wrong, lint stops being a meaningful gate because globals or rules no longer match runtime reality. The absence of root-domain tests is itself a limitation worth preserving in the spec: rebuilders should not mistake these contracts for already-verified coverage.
