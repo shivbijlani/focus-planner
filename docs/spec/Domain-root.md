@@ -51,6 +51,14 @@ Even without direct root tests, the code makes several required behaviours expli
 - `vite.config.js` injects a build ID through `define.__APP_BUILD__` and sets `base: '/'`, which the app’s update UI and service-worker registration depend on.
 - `eslint.config.js` treats browser code and Node-side packages differently, so lint failures reflect the actual runtime environment of each subtree.
 
+The domain does include one browser end-to-end suite, `e2e/settings.spec.js` (Playwright), which is the acceptance test for the Settings dialog:
+
+- The agent-gate editor and the agent-settings editor each save an edit and it survives a reload.
+- A mission statement persists and pins to the board.
+- The storage choices offered are browser storage, a local folder, OneDrive and Google Drive; the picker lists every provider even when storage cannot start.
+- Switching the saved storage source in Settings reloads the board from that choice.
+- A failed restore of the active source falls back without changing saved choices and offers reconnect; cancelling reconnect, or cancelling an OAuth source switch, leaves the previously selected source active after reload.
+
 ## Failure modes
 
 The root domain’s failures are operational rather than data-model failures. If `server.js` is wrong, the local desktop workflow breaks: the browser cannot browse or edit the planner folder, or the Windows folder picker fails. If `vite.config.js` is wrong, service workers can be served from the wrong place, build IDs disappear, or CI starts collecting non-Vitest plugin self-tests and fails spuriously. If `eslint.config.js` is wrong, lint stops being a meaningful gate because globals or rules no longer match runtime reality. The absence of root-domain tests is itself a limitation worth preserving in the spec: rebuilders should not mistake these contracts for already-verified coverage.

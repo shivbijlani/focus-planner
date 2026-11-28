@@ -166,6 +166,12 @@ housekeeping.
 
 ## Silent auto-restart is the remedy
 
+### Preventive restart of the desktop app (opt-in)
+
+`plugins/overnight-agent/checks/reliability-supervisor.mjs` is the optional supervisor that restarts the Copilot desktop app *before* it degrades, and only when nothing is in flight. It is off by default for memory recovery and installed by the opt-in reliability tray. A restart is considered only after a target interval (default 3 hours) and only when every observed activity source is verified continuously quiet for a quiet window (default 15 minutes): a pending human interaction, a live tool, background work, startup, or a new interactive turn each marks the app *active*, and an unknown reading is never treated as idle. A hard deadline (default 4 hours, which must exceed the target and cover the restart cooldown) permits a forced restart only under a named explicit-user-approval authorization string. A minimum interval between restarts (default 60 minutes) prevents restart loops. The rejected alternative — restarting on a clock alone — would kill a run or a user mid-turn; gating on verified quiet makes the remedy safe to be silent.
+
+Opt-in memory-pressure recovery (issue #870's shipped change) adds a second trigger: sustained high memory use by the app, sampled from `plugins/overnight-agent/checks/memory-pressure.mjs` with a high threshold (85 percent) and a critical threshold (95 percent), a minimum app share so an unrelated process hogging memory does not restart the app, a sustained duration, and a cooldown. A critical-memory restart additionally requires the memory feature enabled and its own authorization string. The supervisor keeps its state in atomically swapped JSON, takes an exclusive lock with a lease and heartbeat, refuses unknown configuration keys, and bounds the evidence it records.
+
 The supervisor acts because this repository has repeated evidence that detect-only lines are skimmed.
 `oa-supervisor.ps1` does not page; it decides among `none`, `repair-only`, `restart`, and `launch`.
 The action depends on liveness, not just age.

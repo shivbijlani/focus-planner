@@ -106,6 +106,12 @@ npx vitest run \
 </details>
 That validates append-only journal writes, sentinel handling, fence masking, queue concurrency, human-authored gate preservation, and surgical `user-settings.md` edits.
 
+## 2b. Build the shared ordering core and the Docs libraries
+
+`packages/planner-shared-core` has no dependencies and is needed by the board UI, so build it with the board: `taskSort.js` first (manager-priority parsing, chain resolution with cycle and depth guards, then the four-key sort), then `taskMove.js`, which imports it. Verify with the cases in [Domain-planner-shared-core](Domain-planner-shared-core).
+
+Next build `packages/docs-core` (`grammar.js`, then `doc.js`, `anchor.js`, `links.js`, `readLoad.js`, `review.js`, `validate.js`; `index.js` re-exports them and adds the path helpers). It is dependency-free apart from the shared journal fence rule, which `src/journalChat.js` must import from it. Only after that build `packages/docs-publisher` (`lock.js`, `publisher.js`, then the `fp-docs` entry). Defer `packages/planner-tools` until step 3 is done, because it imports the UI's pure operations, the folder-sync table codec and merge, `docs-core` and `docs-publisher`. Verify each stage with its domain page: [Domain-docs-core](Domain-docs-core), [Domain-docs-publisher](Domain-docs-publisher), [Domain-planner-tools](Domain-planner-tools).
+
 ## 3. Build folder-sync before finalizing storage orchestration
 
 The repo’s current graph wires sync directly into storage: `src/storage/storage.js` imports `../../packages/folder-sync/src/index.js`. So a clean rebuild should implement the sync package before the final top-level storage service, even if you stub the boundary briefly.
